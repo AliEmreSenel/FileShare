@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ filename }}</title>
+    <meta name="color-scheme" content="light dark" />
+    <style>
+        :root{--bg:#0b0c0f;--card:#12141a;--text:#e9ecf1;--muted:#a7afbf;--border:#242836;--accent:#7c5cff;--shadow:0 12px 40px rgba(0,0,0,.35);--radius:16px;--mono:monospace;--sans:system-ui,-apple-system,sans-serif;}
+        @media(prefers-color-scheme:light){:root{--bg:#f6f7fb;--card:#ffffff;--text:#0b1020;--muted:#5b6476;--border:#e6e8f0;--shadow:0 12px 36px rgba(10,16,32,.08);}}
+        *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font-family:var(--sans);}.wrap{width:min(860px,92vw);padding:24px;}.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:22px;}.btn{background:var(--accent);color:white;padding:10px 14px;border-radius:12px;text-decoration:none;display:inline-block;font-weight:650;}.grid{display:grid;gap:12px;margin-top:18px;grid-template-columns:1fr 1fr;}.box{border:1px solid var(--border);border-radius:14px;padding:14px;}.k{font-size:11px;color:var(--muted);text-transform:uppercase;margin-bottom:6px;}.v{font-family:var(--mono);word-break:break-all;}
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="card">
+            <h1 style="margin:0;font-size:18px;">{{ filename }}</h1>
+            <div style="margin-top:6px;font-size:12px;color:var(--muted);">{{ share_url }}</div>
+            <div style="margin-top:16px"><a class="btn" href="/d/{{ token }}">Download</a></div>
+            <div class="grid">
+                <div class="box"><div class="k">Size</div><div class="v">{{ size }}</div></div>
+                <div class="box"><div class="k">Type</div><div class="v">{{ content_type }}</div></div>
+                <div class="box"><div class="k">Uploaded</div><div class="v date">{{ created_at }}</div></div>
+                <div class="box"><div class="k">Expires</div><div class="v date">{{ expires_at }}</div></div>
+            </div>
+        </div>
+    </div>
+    <script>
+        document.querySelectorAll('.v.date').forEach(el => {
+            const ts = parseInt(el.innerText);
+            el.innerText = new Date(ts * 1000).toLocaleString();
+        });
+    </script>
+</body>
+</html>

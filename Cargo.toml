@@ -1,0 +1,12 @@
+[package]
+name = "fileshare"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", features = ["multipart", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] } # Needed for file streaming
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+rand = "0.9"
+futures = "0.3" # Common dependency for async stream handling

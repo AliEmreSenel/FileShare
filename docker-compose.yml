@@ -1,0 +1,18 @@
+services:
+  fileshare:
+    build: .
+    container_name: fileshare
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    user: "1000:1000"
+    # Security Hardening
+    read_only: true               # Root FS is read-only
+    cap_drop: [ALL]               # Drop all Linux capabilities
+    security_opt:
+      - no-new-privileges:true
+    # Make /data writable (since root is read-only)
+    tmpfs:
+      - /tmp                      # Needed for temporary files during upload
