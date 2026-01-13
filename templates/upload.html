@@ -3,26 +3,61 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Share a file</title>
-    <meta name="color-scheme" content="light dark" />
+    <title>Secure Drop</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; form-action 'self'; base-uri 'self';">
     <style>
-        :root{--bg:#0b0c0f;--card:#12141a;--text:#e9ecf1;--muted:#a7afbf;--border:#242836;--accent:#7c5cff;--shadow:0 12px 40px rgba(0,0,0,.35);--radius:16px;--mono:monospace;--sans:system-ui,-apple-system,sans-serif;}
-        @media(prefers-color-scheme:light){:root{--bg:#f6f7fb;--card:#ffffff;--text:#0b1020;--muted:#5b6476;--border:#e6e8f0;--shadow:0 12px 36px rgba(10,16,32,.08);}}
-        *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--text);font-family:var(--sans);}.wrap{width:min(920px,92vw);padding:24px;}.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;padding:22px;}.drop{border:1px dashed color-mix(in srgb,var(--border) 70%,var(--accent) 30%);border-radius:14px;padding:18px;background:color-mix(in srgb,var(--card) 92%,var(--accent) 8%);}.btn{background:var(--accent);color:white;padding:10px 14px;border-radius:12px;border:0;font-weight:650;cursor:pointer;}
+        :root { --bg:#f0f2f5; --text:#000; --border:#000; --accent:#FF5F5F; --font:'Courier New', monospace; }
+        body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font-family:var(--font); padding:20px; }
+        .neo { background:#fff; border:3px solid var(--border); box-shadow:5px 5px 0 0 #000; padding:25px; width:min(450px, 95vw); }
+        h1 { margin-top:0; letter-spacing:-1px; }
+        select, button { width:100%; padding:12px; margin-bottom:15px; font:inherit; font-weight:bold; border:3px solid var(--border); cursor:pointer; }
+        select { background:#eee; box-shadow:3px 3px 0 0 #000; }
+        button { background:var(--accent); box-shadow:5px 5px 0 0 #000; text-transform:uppercase; }
+        button:active { transform:translate(2px,2px); box-shadow:3px 3px 0 0 #000; }
+        #drop { border:3px dashed var(--border); background:#eee; padding:30px 20px; text-align:center; margin-bottom:20px; cursor:pointer; }
+        #drop.hover { background:var(--accent); border-style:solid; }
+        #file-name { display:none; margin-top:10px; padding:5px; background:#fff; border:2px solid var(--border); word-break:break-all; }
     </style>
 </head>
 <body>
-    <div class="wrap">
-        <div class="card">
-            <h1 style="margin:0 0 16px 0;font-size:18px;">Drop</h1>
-            <form class="drop" action="/u" method="post" enctype="multipart/form-data">
-                <strong style="display:block;margin-bottom:8px">Upload File</strong>
-                <div style="margin-bottom:14px;font-size:12px;color:var(--muted)">Max {{ max_size }}, expires in {{ ttl }} hours.</div>
-                <input type="file" name="file" required style="width:100%;margin-bottom:14px" />
-                <button class="btn" type="submit">Upload</button>
-            </form>
-            {{ error_html }}
-        </div>
+    <div class="neo">
+        <h1>>>> ENCRYPT & UPLOAD</h1>
+        <form action="/u" method="post" enctype="multipart/form-data">
+            <label>EXPIRATION:</label>
+            <select name="ttl">
+                <option value="1">1 Day</option>
+                <option value="7" selected>7 Days</option>
+                <option value="30">30 Days</option>
+            </select>
+            <div id="drop">
+                <span id="lbl">DROP FILE HERE<br>OR CLICK</span>
+                <input type="file" name="file" id="f" required style="display:none"/>
+                <div id="file-name"></div>
+            </div>
+            <button type="submit">INITIATE UPLOAD</button>
+        </form>
     </div>
+    <script nonce="{{nonce}}">
+        const d = document.getElementById('drop');
+        const f = document.getElementById('f');
+        const lbl = document.getElementById('lbl');
+        const n = document.getElementById('file-name');
+
+        // Safety: We use innerText to display filenames
+        const update = (file) => {
+            const dT = new DataTransfer(); dT.items.add(file); f.files = dT.files;
+            lbl.innerText = "FILE SELECTED:";
+            n.innerText = file.name; // SAFE: innerText prevents XSS
+            n.style.display = 'block';
+            d.style.background = '#e6ffe6';
+            d.style.borderStyle = 'solid';
+        };
+
+        ['dragenter','dragover'].forEach(e => d.addEventListener(e, (ev)=>{ ev.preventDefault(); d.classList.add('hover'); }));
+        ['dragleave','drop'].forEach(e => d.addEventListener(e, (ev)=>{ ev.preventDefault(); d.classList.remove('hover'); }));
+        d.addEventListener('drop', (e) => { if(e.dataTransfer.files[0]) update(e.dataTransfer.files[0]); });
+        d.addEventListener('click', () => f.click());
+        f.addEventListener('change', () => { if(f.files[0]) update(f.files[0]); });
+    </script>
 </body>
 </html>

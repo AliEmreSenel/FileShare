@@ -1,13 +1,17 @@
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Multipart, Path, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, State},
     http::{header, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Router,
 };
-use futures::TryStreamExt;
+use chacha20::{
+    cipher::{KeyIvInit, StreamCipher},
+    XChaCha20, XNonce,
+};
 use rand::{distr::Alphanumeric, Rng};
+use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, FromRow, Pool, Sqlite};
 use std::{
     net::SocketAddr,
@@ -17,18 +21,15 @@ use std::{
 };
 use tokio::{
     fs::{self, File},
-    io::AsyncWriteExt,
+    io::{AsyncReadExt, AsyncWriteExt},
 };
-use tokio_util::io::ReaderStream;
 
-// --- CONFIGURATION ---
+// --- CONFIG ---
 const UPLOAD_DIR: &str = "data/files";
 const DB_URL: &str = "sqlite://data/db.sqlite?mode=rwc";
-const MAX_UPLOAD_SIZE: usize = 100 * 1024 * 1024; // 100 MB
-const DEFAULT_TTL_SECS: u64 = 24 * 60 * 60; // 24 Hours
+const MAX_SIZE: usize = 100 * 1024 * 1024; // 100 MB
 
-// --- TEMPLATES ---
-// include_str! loads the file content into the binary at compile time.
+// Load templates
 const HTML_UPLOAD: &str = include_str!("../templates/upload.html");
 const HTML_FILE: &str = include_str!("../templates/file.html");
 
@@ -40,113 +41,127 @@ struct AppState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(UPLOAD_DIR).await?;
-    if let Some(parent) = std::path::Path::new("data").parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(p) = std::path::Path::new("data").parent() {
+        if !p.as_os_str().is_empty() {
             fs::create_dir_all("data").await?;
         }
     }
 
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect(DB_URL)
-        .await?;
-
+    let pool = SqlitePoolOptions::new().connect(DB_URL).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS shares (
-            token TEXT PRIMARY KEY,
-            filename TEXT NOT NULL,
-            content_type TEXT NOT NULL,
-            size INTEGER NOT NULL,
-            created_at INTEGER NOT NULL,
-            expires_at INTEGER NOT NULL
-        )",
+        token TEXT PRIMARY KEY, filename TEXT NOT NULL, size INTEGER, 
+        created_at INTEGER, expires_at INTEGER, ip TEXT
+    )",
     )
     .execute(&pool)
     .await?;
 
-    let state = Arc::new(AppState { pool: pool.clone() });
-
-    let cleanup_pool = pool.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            if let Err(e) = cleanup_expired(&cleanup_pool).await {
-                eprintln!("Cleanup error: {}", e);
-            }
-        }
-    });
-
     let app = Router::new()
         .route("/", get(show_upload))
         .route("/u", post(handle_upload))
-        .route("/f/{token}", get(show_file_page))
+        .route("/f/{token}", get(show_file))
         .route("/d/{token}", get(download_file))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE))
-        .with_state(state);
+        .layer(DefaultBodyLimit::max(MAX_SIZE))
+        .with_state(Arc::new(AppState { pool }));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
-    println!("Server listening on http://{}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    println!("Listening on http://0.0.0.0:8080");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
+}
+
+// --- HELPER: Generate Nonce ---
+fn gen_nonce() -> String {
+    rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(24)
+        .map(char::from)
+        .collect()
 }
 
 // --- HANDLERS ---
 
-async fn show_upload() -> impl IntoResponse {
-    render_upload_page(None)
+async fn show_upload() -> Html<String> {
+    // Inject a unique nonce for CSP
+    let nonce = gen_nonce();
+    let html = HTML_UPLOAD
+        .replace("{{nonce}}", &nonce)
+        .replace("{{max_size}}", &MAX_SIZE.to_string());
+    Html(html)
 }
 
 async fn handle_upload(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
-    while let Ok(Some(field)) = multipart.next_field().await {
-        let name = field.name().unwrap_or("").to_string();
+    let mut ttl_days = 1;
 
-        if name == "file" {
-            let original_filename = field.file_name().unwrap_or("file").to_string();
-            let content_type = field
-                .content_type()
-                .unwrap_or("application/octet-stream")
-                .to_string();
+    while let Ok(Some(mut field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("");
+
+        if name == "ttl" {
+            if let Ok(txt) = field.text().await {
+                if let Ok(d) = txt.parse::<u64>() {
+                    if [1, 2, 5, 7, 14, 30, 60, 90, 365].contains(&d) {
+                        ttl_days = d;
+                    }
+                }
+            }
+        } else if name == "file" {
+            // RAW INPUT: No sanitization. Storing exact bytes sent by browser.
+            let filename = field.file_name().unwrap_or("unknown").to_string();
 
             let token: String = rand::rng()
                 .sample_iter(&Alphanumeric)
-                .take(12)
+                .take(16)
                 .map(char::from)
                 .collect();
+            let key = Sha256::digest(token.as_bytes());
+            let mut nonce = [0u8; 24];
+            rand::rng().fill(&mut nonce);
+            let mut cipher = XChaCha20::new(&key, XNonce::from_slice(&nonce));
 
-            let file_path = PathBuf::from(UPLOAD_DIR).join(&token);
-            let mut file = File::create(&file_path).await.map_err(AppError::Io)?;
-            let mut stream = field;
+            let path = PathBuf::from(UPLOAD_DIR).join(&token);
+            let mut file = File::create(&path).await.map_err(AppError::Io)?;
+            file.write_all(&nonce).await.map_err(AppError::Io)?;
+
             let mut size = 0;
-
-            while let Some(chunk) = stream.try_next().await.map_err(|_| AppError::BadRequest)? {
+            while let Ok(Some(chunk)) = field.chunk().await {
+                if size + chunk.len() > MAX_SIZE {
+                    let _ = fs::remove_file(path).await;
+                    return Err(AppError::BadRequest);
+                }
+                let mut buf = chunk.to_vec();
+                cipher.apply_keystream(&mut buf);
+                file.write_all(&buf).await.map_err(AppError::Io)?;
                 size += chunk.len();
-                file.write_all(&chunk).await.map_err(AppError::Io)?;
+            }
+            if size == 0 {
+                let _ = fs::remove_file(path).await;
+                return Err(AppError::BadRequest);
             }
 
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs() as i64;
-            let expires_at = now + DEFAULT_TTL_SECS as i64;
 
-            sqlx::query(
-                "INSERT INTO shares (token, filename, content_type, size, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)"
-            )
-            .bind(&token)
-            .bind(&original_filename)
-            .bind(&content_type)
-            .bind(size as i64)
-            .bind(now)
-            .bind(expires_at)
-            .execute(&state.pool)
-            .await
-            .map_err(AppError::Db)?;
+            sqlx::query("INSERT INTO shares VALUES (?, ?, ?, ?, ?, ?)")
+                .bind(&token)
+                .bind(&filename)
+                .bind(size as i64)
+                .bind(now)
+                .bind(now + (ttl_days * 86400) as i64)
+                .bind(addr.ip().to_string())
+                .execute(&state.pool)
+                .await
+                .map_err(AppError::Db)?;
 
             return Ok(Response::builder()
                 .status(StatusCode::SEE_OTHER)
@@ -155,14 +170,13 @@ async fn handle_upload(
                 .unwrap());
         }
     }
-
-    Ok(render_upload_page(Some("Failed to upload file")).into_response())
+    Err(AppError::BadRequest)
 }
 
-async fn show_file_page(
+async fn show_file(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<Html<String>, AppError> {
     let row: ShareRow = sqlx::query_as("SELECT * FROM shares WHERE token = ?")
         .bind(&token)
         .fetch_optional(&state.pool)
@@ -170,16 +184,25 @@ async fn show_file_page(
         .map_err(AppError::Db)?
         .ok_or(AppError::NotFound)?;
 
-    // We use .replace() for basic templating to avoid pulling in external crates.
-    // It's simple and effective for this scale.
+    if SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        > row.expires_at
+    {
+        return Err(AppError::NotFound);
+    }
+
+    let nonce = gen_nonce();
+
+    // Injecting RAW, potentially malicious filename.
+    // Safety relies entirely on CSP in the HTML template.
     let html = HTML_FILE
-        .replace("{{ filename }}", &row.filename)
-        .replace("{{ token }}", &row.token)
-        .replace("{{ share_url }}", &format!("/f/{}", row.token))
-        .replace("{{ size }}", &format_bytes(row.size as u64))
-        .replace("{{ content_type }}", &row.content_type)
-        .replace("{{ created_at }}", &row.created_at.to_string())
-        .replace("{{ expires_at }}", &row.expires_at.to_string());
+        .replace("{{nonce}}", &nonce)
+        .replace("{{filename}}", &row.filename)
+        .replace("{{token}}", &row.token)
+        .replace("{{size}}", &row.size.to_string())
+        .replace("{{expires}}", &row.expires_at.to_string());
 
     Ok(Html(html))
 }
@@ -195,98 +218,43 @@ async fn download_file(
         .map_err(AppError::Db)?
         .ok_or(AppError::NotFound)?;
 
-    let path = PathBuf::from(UPLOAD_DIR).join(&token);
-
-    if !path.exists() {
+    if SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        > row.expires_at
+    {
         return Err(AppError::NotFound);
     }
 
-    let file = File::open(path).await.map_err(AppError::Io)?;
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
+    let path = PathBuf::from(UPLOAD_DIR).join(&token);
+    let mut file = File::open(path).await.map_err(|_| AppError::NotFound)?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data).await.map_err(AppError::Io)?;
+
+    if data.len() < 24 {
+        return Err(AppError::EncryptionError);
+    }
+    let (nonce, ciphertext) = data.split_at_mut(24);
+
+    let key = Sha256::digest(token.as_bytes());
+    let mut cipher = XChaCha20::new(&key, XNonce::from_slice(nonce));
+    cipher.apply_keystream(ciphertext);
 
     let headers = [
-        (header::CONTENT_TYPE, row.content_type),
+        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
         (
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{}\"", row.filename),
         ),
     ];
-
-    Ok((headers, body))
-}
-
-// --- HELPERS ---
-
-fn render_upload_page(error: Option<&str>) -> Html<String> {
-    let error_html = if let Some(err) = error {
-        format!(
-            r#"<p style="color:#ef4444;margin-top:10px;font-size:14px;">{}</p>"#,
-            err
-        )
-    } else {
-        String::new()
-    };
-
-    let html = HTML_UPLOAD
-        .replace("{{ max_size }}", &format_bytes(MAX_UPLOAD_SIZE as u64))
-        .replace("{{ ttl }}", &(DEFAULT_TTL_SECS / 3600).to_string())
-        .replace("{{ error_html }}", &error_html);
-
-    Html(html)
-}
-
-async fn cleanup_expired(pool: &Pool<Sqlite>) -> Result<(), Box<dyn std::error::Error>> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-
-    let rows: Vec<ShareRow> = sqlx::query_as("SELECT * FROM shares WHERE expires_at < ?")
-        .bind(now)
-        .fetch_all(pool)
-        .await?;
-
-    for row in &rows {
-        let path = PathBuf::from(UPLOAD_DIR).join(&row.token);
-        if path.exists() {
-            let _ = fs::remove_file(path).await;
-        }
-    }
-
-    if !rows.is_empty() {
-        sqlx::query("DELETE FROM shares WHERE expires_at < ?")
-            .bind(now)
-            .execute(pool)
-            .await?;
-        println!("Cleaned up {} expired files", rows.len());
-    }
-
-    Ok(())
-}
-
-fn format_bytes(b: u64) -> String {
-    const UNIT: u64 = 1024;
-    if b < UNIT {
-        return format!("{} B", b);
-    }
-    let div = UNIT.pow(1);
-    if b < UNIT.pow(2) {
-        return format!("{:.2} KB", b as f64 / div as f64);
-    }
-    let div = UNIT.pow(2);
-    if b < UNIT.pow(3) {
-        return format!("{:.2} MB", b as f64 / div as f64);
-    }
-    let div = UNIT.pow(3);
-    format!("{:.2} GB", b as f64 / div as f64)
+    Ok((headers, Body::from(ciphertext.to_vec())))
 }
 
 #[derive(FromRow)]
 struct ShareRow {
     token: String,
     filename: String,
-    content_type: String,
     size: i64,
     created_at: i64,
     expires_at: i64,
@@ -297,26 +265,18 @@ enum AppError {
     Db(sqlx::Error),
     BadRequest,
     NotFound,
+    EncryptionError,
 }
-
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, msg) = match self {
-            AppError::Io(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("IO Error: {}", e),
-            ),
-            AppError::Db(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Database Error: {}", e),
-            ),
-            AppError::BadRequest => (StatusCode::BAD_REQUEST, "Bad Request".to_string()),
-            AppError::NotFound => (
-                StatusCode::NOT_FOUND,
-                "File not found or expired".to_string(),
-            ),
+        let (s, m) = match self {
+            AppError::Io(_) | AppError::Db(_) | AppError::EncryptionError => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Server Error")
+            }
+            AppError::BadRequest => (StatusCode::BAD_REQUEST, "Bad Request"),
+            AppError::NotFound => (StatusCode::NOT_FOUND, "Not Found"),
         };
-        (status, msg).into_response()
+        (s, m.to_string()).into_response()
     }
 }
 
