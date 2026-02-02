@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P2P Transfer</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; base-uri 'self';">
+    <style>
+        :root {
+            --bg: #121212;
+            --card: #1E1E1E;
+            --text: #E0E0E0;
+            --border: #FFFFFF;
+            --accent: #FF6B35;
+            --accent2: #00D4FF;
+            --font: 'Courier New', monospace;
+        }
+        * { box-sizing: border-box; }
+        body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font-family:var(--font); padding:20px; }
+        .neo-box {
+            background: var(--card);
+            border: 2px solid var(--border);
+            box-shadow: 6px 6px 0 0 var(--border);
+            padding: 30px;
+            width: min(500px, 95vw);
+        }
+        h1 { margin-top:0; border-bottom: 2px solid var(--border); padding-bottom: 15px; }
+        .code-display {
+            font-size: 2.5rem;
+            letter-spacing: 0.5rem;
+            text-align: center;
+            padding: 20px;
+            background: #000;
+            border: 2px solid var(--accent);
+            margin: 20px 0;
+            font-weight: bold;
+            color: var(--accent);
+        }
+        label { display: block; margin-bottom: 8px; font-weight: bold; font-size: 0.9rem; color: var(--accent2); }
+        input, button {
+            width: 100%;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: #2A2A2A;
+            color: var(--text);
+            border: 2px solid var(--border);
+            font-family: inherit;
+            font-weight: bold;
+            font-size: 1rem;
+            box-shadow: 4px 4px 0 0 var(--border);
+        }
+        input:focus { outline: 2px solid var(--accent2); }
+        button { background: var(--accent); color: #000; text-transform: uppercase; cursor: pointer; }
+        button:hover { background: var(--accent2); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        #drop-zone {
+            border: 2px dashed var(--border);
+            background: #252525;
+            padding: 30px;
+            text-align: center;
+            margin-bottom: 20px;
+            cursor: pointer;
+        }
+        #drop-zone.hover { background: var(--accent); color: #000; border-style: solid; }
+        .status { padding: 15px; margin: 15px 0; border: 1px solid var(--border); background: #000; }
+        .status.success { border-color: #0f0; color: #0f0; }
+        .status.error { border-color: #f00; color: #f00; }
+        .progress-bar { width: 100%; height: 20px; background: #333; margin: 10px 0; }
+        .progress-fill { height: 100%; background: var(--accent2); width: 0%; transition: width 0.3s; }
+        .hidden { display: none; }
+        .tab-btns { display: flex; gap: 10px; margin-bottom: 20px; }
+        .tab-btn { flex: 1; padding: 12px; background: #333; border: 2px solid var(--border); cursor: pointer; text-align: center; font-weight: bold; }
+        .tab-btn.active { background: var(--accent); color: #000; }
+        .section { display: none; }
+        .section.active { display: block; }
+        .back-link { display: block; text-align: center; margin-top: 20px; color: var(--accent2); text-decoration: none; }
+        .back-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="neo-box">
+        <h1>>>> P2P_TRANSFER</h1>
+        
+        <div class="tab-btns">
+            <div class="tab-btn active" data-tab="receive">RECEIVE</div>
+            <div class="tab-btn" data-tab="send">SEND</div>
+        </div>
+
+        <!-- RECEIVE MODE -->
+        <div id="receive" class="section active">
+            <label>YOUR CODE (share with sender):</label>
+            <div class="code-display" id="my-code">------</div>
+            <div id="recv-status" class="status hidden"></div>
+            <div id="recv-progress" class="hidden">
+                <label>RECEIVING:</label>
+                <div class="progress-bar"><div class="progress-fill" id="recv-fill"></div></div>
+                <div id="recv-info"></div>
+            </div>
+        </div>
+
+        <!-- SEND MODE -->
+        <div id="send" class="section">
+            <label>RECEIVER'S CODE:</label>
+            <input type="text" id="target-code" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}">
+            
+            <div id="drop-zone">
+                <span id="drop-lbl">[ DROP FILE HERE ]<br><br>OR CLICK TO BROWSE</span>
+                <input type="file" id="file-input" style="display:none">
+            </div>
+            <div id="file-name" class="hidden"></div>
+            
+            <button id="send-btn" disabled>SEND FILE</button>
+            
+            <div id="send-status" class="status hidden"></div>
+            <div id="send-progress" class="hidden">
+                <label>SENDING:</label>
+                <div class="progress-bar"><div class="progress-fill" id="send-fill"></div></div>
+                <div id="send-info"></div>
+            </div>
+        </div>
+
+        <a href="/" class="back-link">« Back to Upload</a>
+    </div>
+
+    <script nonce="{{nonce}}">
+    (function() {
+        let ws, myCode, selectedFile, pc, dc;
+        const CHUNK_SIZE = 16384; // 16KB chunks
+
+        // --- Tab switching ---
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById(btn.dataset.tab).classList.add('active');
+            });
+        });
+
+        // --- WebSocket connection ---
+        function connect() {
+            const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${proto}//${location.host}/ws`);
+            
+            ws.onmessage = async (e) => {
+                const msg = JSON.parse(e.data);
+                
+                if (msg.type === 'code') {
+                    myCode = msg.code;
+                    document.getElementById('my-code').textContent = myCode;
+                }
+                else if (msg.type === 'offer') {
+                    // Receiver got offer
+                    await handleOffer(msg.from, msg.data);
+                }
+                else if (msg.type === 'answer') {
+                    // Sender got answer
+                    await pc.setRemoteDescription(msg.data);
+                }
+                else if (msg.type === 'ice') {
+                    if (pc && msg.data) {
+                        await pc.addIceCandidate(msg.data);
+                    }
+                }
+            };
+
+            ws.onclose = () => setTimeout(connect, 2000);
+        }
+        connect();
+
+        // --- File selection ---
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        ['dragenter','dragover'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('hover'); }));
+        ['dragleave','drop'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.remove('hover'); }));
+        
+        dropZone.addEventListener('drop', e => {
+            if (e.dataTransfer.files[0]) selectFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files[0]) selectFile(fileInput.files[0]);
+        });
+
+        function selectFile(file) {
+            selectedFile = file;
+            document.getElementById('drop-lbl').textContent = '>> FILE SELECTED <<';
+            const fn = document.getElementById('file-name');
+            fn.textContent = file.name + ' (' + formatSize(file.size) + ')';
+            fn.classList.remove('hidden');
+            checkReady();
+        }
+
+        document.getElementById('target-code').addEventListener('input', checkReady);
+        
+        function checkReady() {
+            const code = document.getElementById('target-code').value;
+            sendBtn.disabled = !(selectedFile && code.length === 6);
+        }
+
+        // --- Send file ---
+        sendBtn.addEventListener('click', startSend);
+
+        async function startSend() {
+            const targetCode = document.getElementById('target-code').value;
+            if (!selectedFile || targetCode.length !== 6) return;
+            
+            sendBtn.disabled = true;
+            showStatus('send-status', 'Connecting...', '');
+
+            // Generate encryption key
+            const key = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 },
+                true,
+                ['encrypt', 'decrypt']
+            );
+            const exportedKey = await crypto.subtle.exportKey('raw', key);
+
+            // Create WebRTC connection
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            pc.onicecandidate = e => {
+                if (e.candidate) {
+                    ws.send(JSON.stringify({ type: 'ice', target: targetCode, data: e.candidate }));
+                }
+            };
+
+            // Create data channel
+            dc = pc.createDataChannel('file', { ordered: true });
+            dc.binaryType = 'arraybuffer';
+
+            dc.onopen = async () => {
+                showStatus('send-status', 'Connected! Encrypting and sending...', 'success');
+                document.getElementById('send-progress').classList.remove('hidden');
+                
+                // Send metadata + key first
+                const meta = {
+                    name: selectedFile.name,
+                    size: selectedFile.size,
+                    key: Array.from(new Uint8Array(exportedKey))
+                };
+                dc.send(JSON.stringify(meta));
+
+                // Read and encrypt file in chunks
+                const reader = selectedFile.stream().getReader();
+                let sent = 0;
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    // Encrypt chunk
+                    const iv = crypto.getRandomValues(new Uint8Array(12));
+                    const encrypted = await crypto.subtle.encrypt(
+                        { name: 'AES-GCM', iv },
+                        key,
+                        value
+                    );
+                    
+                    // Combine IV + encrypted data
+                    const combined = new Uint8Array(12 + encrypted.byteLength);
+                    combined.set(iv, 0);
+                    combined.set(new Uint8Array(encrypted), 12);
+
+                    // Wait for buffer to drain
+                    while (dc.bufferedAmount > 1024 * 1024) {
+                        await new Promise(r => setTimeout(r, 50));
+                    }
+                    
+                    dc.send(combined);
+                    sent += value.length;
+                    updateProgress('send', sent, selectedFile.size);
+                }
+
+                // Signal end
+                dc.send('__END__');
+                showStatus('send-status', 'File sent successfully!', 'success');
+            };
+
+            dc.onerror = () => showStatus('send-status', 'Transfer failed', 'error');
+
+            // Create and send offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: 'offer', target: targetCode, data: offer }));
+        }
+
+        // --- Handle incoming connection (receiver) ---
+        async function handleOffer(from, offer) {
+            showStatus('recv-status', 'Incoming connection from ' + from + '...', '');
+            
+            pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            pc.onicecandidate = e => {
+                if (e.candidate) {
+                    ws.send(JSON.stringify({ type: 'ice', target: from, data: e.candidate }));
+                }
+            };
+
+            let key, fileName, fileSize, chunks = [], received = 0;
+
+            pc.ondatachannel = e => {
+                dc = e.channel;
+                dc.binaryType = 'arraybuffer';
+
+                dc.onmessage = async (ev) => {
+                    if (typeof ev.data === 'string') {
+                        if (ev.data === '__END__') {
+                            // Combine and download
+                            const blob = new Blob(chunks);
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = fileName;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                            showStatus('recv-status', 'File received: ' + fileName, 'success');
+                            return;
+                        }
+                        // Metadata
+                        const meta = JSON.parse(ev.data);
+                        fileName = meta.name;
+                        fileSize = meta.size;
+                        key = await crypto.subtle.importKey(
+                            'raw',
+                            new Uint8Array(meta.key),
+                            'AES-GCM',
+                            false,
+                            ['decrypt']
+                        );
+                        showStatus('recv-status', 'Receiving: ' + fileName, 'success');
+                        document.getElementById('recv-progress').classList.remove('hidden');
+                    } else {
+                        // Encrypted chunk
+                        const data = new Uint8Array(ev.data);
+                        const iv = data.slice(0, 12);
+                        const encrypted = data.slice(12);
+                        
+                        try {
+                            const decrypted = await crypto.subtle.decrypt(
+                                { name: 'AES-GCM', iv },
+                                key,
+                                encrypted
+                            );
+                            chunks.push(new Uint8Array(decrypted));
+                            received += decrypted.byteLength;
+                            updateProgress('recv', received, fileSize);
+                        } catch (err) {
+                            showStatus('recv-status', 'Decryption failed', 'error');
+                        }
+                    }
+                };
+            };
+
+            await pc.setRemoteDescription(offer);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            ws.send(JSON.stringify({ type: 'answer', target: from, data: answer }));
+        }
+
+        // --- Helpers ---
+        function showStatus(id, msg, type) {
+            const el = document.getElementById(id);
+            el.textContent = msg;
+            el.className = 'status' + (type ? ' ' + type : '');
+            el.classList.remove('hidden');
+        }
+
+        function updateProgress(mode, current, total) {
+            const pct = (current / total * 100).toFixed(1);
+            document.getElementById(mode + '-fill').style.width = pct + '%';
+            document.getElementById(mode + '-info').textContent = formatSize(current) + ' / ' + formatSize(total) + ' (' + pct + '%)';
+        }
+
+        function formatSize(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let i = 0;
+            while (bytes >= 1024 && i < 3) { bytes /= 1024; i++; }
+            return bytes.toFixed(2) + ' ' + units[i];
+        }
+    })();
+    </script>
+</body>
+</html>

@@ -1,7 +1,10 @@
 use axum::{
     body::Body,
-    extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, State},
-    http::{header, HeaderMap, StatusCode}, // Added HeaderMap
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        ConnectInfo, DefaultBodyLimit, Multipart, Path, State,
+    },
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -10,10 +13,13 @@ use chacha20::{
     cipher::{KeyIvInit, StreamCipher},
     XChaCha20, XNonce,
 };
+use futures::{SinkExt, StreamExt};
 use rand::{distr::Alphanumeric, Rng};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, FromRow, Pool, Sqlite};
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
@@ -22,6 +28,7 @@ use std::{
 use tokio::{
     fs::{self, File},
     io::{AsyncReadExt, AsyncWriteExt},
+    sync::{mpsc, RwLock},
 };
 
 // --- CONFIG ---
@@ -32,10 +39,28 @@ const MAX_SIZE: usize = 100 * 1024 * 1024; // 100 MB
 // Import the separate HTML files at compile time
 const HTML_UPLOAD: &str = include_str!("../templates/upload.html");
 const HTML_FILE: &str = include_str!("../templates/file.html");
+const HTML_P2P: &str = include_str!("../templates/p2p.html");
+
+// --- P2P Signaling ---
+type PeerTx = mpsc::UnboundedSender<String>;
+type PeerMap = Arc<RwLock<HashMap<String, PeerTx>>>;
+
+#[derive(Serialize, Deserialize)]
+struct SignalMsg {
+    #[serde(rename = "type")]
+    msg_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
+}
 
 #[derive(Clone)]
 struct AppState {
     pool: Pool<Sqlite>,
+    peers: PeerMap,
 }
 
 #[tokio::main]
@@ -71,13 +96,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // Note: We still need ConnectInfo for the fallback IP
+    let peers: PeerMap = Arc::new(RwLock::new(HashMap::new()));
+
     let app = Router::new()
         .route("/", get(show_upload))
         .route("/u", post(handle_upload))
         .route("/f/{token}", get(show_file))
         .route("/d/{token}", get(download_file))
+        .route("/p2p", get(show_p2p))
+        .route("/ws", get(ws_handler))
         .layer(DefaultBodyLimit::max(MAX_SIZE))
-        .with_state(Arc::new(AppState { pool }));
+        .with_state(Arc::new(AppState { pool, peers }));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     println!("Listening on http://0.0.0.0:8080");
@@ -114,6 +143,73 @@ fn get_real_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
 async fn show_upload() -> Html<String> {
     let nonce = gen_nonce();
     Html(HTML_UPLOAD.replace("{{nonce}}", &nonce))
+}
+
+async fn show_p2p() -> Html<String> {
+    let nonce = gen_nonce();
+    Html(HTML_P2P.replace("{{nonce}}", &nonce))
+}
+
+// --- WebSocket Signaling for P2P ---
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_ws(socket, state.peers.clone()))
+}
+
+async fn handle_ws(socket: WebSocket, peers: PeerMap) {
+    let (mut sender, mut receiver) = socket.split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+
+    // Generate 6-digit code
+    let code: String = (0..6)
+        .map(|_| rand::rng().random_range(0..=9).to_string())
+        .collect();
+
+    // Register peer
+    peers.write().await.insert(code.clone(), tx);
+
+    // Send code to client
+    let welcome = serde_json::json!({ "type": "code", "code": code });
+    let _ = sender.send(Message::Text(welcome.to_string().into())).await;
+
+    // Task to forward messages from channel to websocket
+    let code_clone = code.clone();
+    let send_task = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if sender.send(Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+        code_clone
+    });
+
+    // Handle incoming messages
+    let peers_clone = peers.clone();
+    let code_clone = code.clone();
+    while let Some(Ok(msg)) = receiver.next().await {
+        if let Message::Text(text) = msg {
+            if let Ok(signal) = serde_json::from_str::<SignalMsg>(&text) {
+                if let Some(target) = &signal.target {
+                    let peers_read = peers_clone.read().await;
+                    if let Some(target_tx) = peers_read.get(target) {
+                        // Forward with sender's code
+                        let forward = serde_json::json!({
+                            "type": signal.msg_type,
+                            "from": code_clone,
+                            "data": signal.data
+                        });
+                        let _ = target_tx.send(forward.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Cleanup
+    peers.write().await.remove(&code);
+    send_task.abort();
 }
 
 async fn handle_upload(
