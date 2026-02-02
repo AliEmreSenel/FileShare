@@ -7,7 +7,7 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/app/data
-    user: "1000:1000"
+    user: "1001:1001"
     # Security Hardening
     read_only: true               # Root FS is read-only
     cap_drop: [ALL]               # Drop all Linux capabilities
