@@ -310,13 +310,19 @@ async fn show_file(
         return Err(AppError::NotFound);
     }
 
+    let ttl_secs = row.expires_at.saturating_sub(row.created_at);
+    let ttl_days = std::cmp::max(1, ((ttl_secs + 86399) / 86400) as i64);
+
     let nonce = gen_nonce();
     let html = HTML_FILE
         .replace("{{nonce}}", &nonce)
         .replace("{{filename}}", &row.filename)
         .replace("{{token}}", &row.token)
         .replace("{{size}}", &row.size.to_string())
-        .replace("{{expires}}", &row.expires_at.to_string());
+        .replace("{{expires}}", &row.expires_at.to_string())
+        .replace("{{uploaded}}", &row.created_at.to_string())
+        .replace("{{ttl_days}}", &ttl_days.to_string())
+        .replace("{{downloads}}", "—");
 
     Ok(Html(html))
 }
