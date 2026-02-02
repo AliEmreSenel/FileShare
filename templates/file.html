@@ -3,93 +3,579 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Download</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'self';">
+    <title>Secure Drop - Download</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; form-action 'self'; base-uri 'self';">
     <style>
         :root {
-            --bg: #121212;
-            --card: #1E1E1E;
+            --bg: #0a0a0a;
+            --card: #0d0d0d;
             --text: #E0E0E0;
             --border: #FFFFFF;
-            --accent: #00FF9D; /* Neon Mint */
-            --accent-hover: #00CC7D;
+            --accent: #B026FF;
+            --accent-hover: #9000FF;
+            --accent2: #FF6B35;
+            --accent3: #00D4FF;
             --font: 'Courier New', monospace;
         }
         * { box-sizing: border-box; }
-        body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font-family:var(--font); padding:20px; }
-        
+
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100vh); }
+        }
+
+        @keyframes glitch {
+            0%, 100% { text-shadow: 2px 0 var(--accent2), -2px 0 var(--accent3); }
+            25% { text-shadow: -2px 0 var(--accent2), 2px 0 var(--accent3); }
+            50% { text-shadow: 2px 2px var(--accent2), -2px -2px var(--accent3); }
+            75% { text-shadow: -2px 2px var(--accent2), 2px -2px var(--accent3); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-5px); }
+        }
+
+        @keyframes rotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        body { 
+            margin: 0; 
+            min-height: 100vh; 
+            display: grid; 
+            place-items: center; 
+            background: var(--bg); 
+            color: var(--text); 
+            font-family: var(--font); 
+            padding: 20px;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 20px 20px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            animation: scanline 6s linear infinite;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0.15;
+        }
+
+        .container { position: relative; z-index: 1; }
+
+        .side-text {
+            position: fixed;
+            font-size: 0.6rem;
+            color: #222;
+            letter-spacing: 0.3rem;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .side-text.left {
+            left: 20px;
+            top: 50%;
+            transform: rotate(-90deg) translateX(-50%);
+            transform-origin: left center;
+        }
+
+        .side-text.right {
+            right: 20px;
+            top: 50%;
+            transform: rotate(90deg) translateX(50%);
+            transform-origin: right center;
+        }
+
+        .float-decor {
+            position: fixed;
+            font-size: 1.5rem;
+            color: var(--accent3);
+            opacity: 0.15;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        .float-decor:nth-child(1) { top: 10%; left: 5%; animation-delay: 0s; }
+        .float-decor:nth-child(2) { top: 20%; right: 8%; animation-delay: 0.5s; }
+        .float-decor:nth-child(3) { bottom: 15%; left: 10%; animation-delay: 1s; }
+        .float-decor:nth-child(4) { bottom: 25%; right: 5%; animation-delay: 1.5s; }
+
         .neo-box {
             background: var(--card);
-            border: 2px solid var(--border);
-            box-shadow: 6px 6px 0 0 var(--border);
-            padding: 30px;
-            width: min(450px, 95vw);
+            border: 3px solid var(--border);
+            box-shadow: 
+                8px 8px 0 0 var(--border),
+                0 0 30px rgba(0, 212, 255, 0.1);
+            padding: 35px;
+            width: min(540px, 95vw);
+            position: relative;
         }
 
-        h2 { margin-top:0; word-break:break-all; border-bottom: 2px solid var(--border); padding-bottom: 15px; margin-bottom: 25px; color: var(--accent); }
-        
-        .btn {
+        .neo-box::before {
+            content: '[ FILE::READY ] ─── [ INTEGRITY::VERIFIED ] ─── [ DECRYPTION::ENABLED ]';
+            position: absolute;
+            top: -30px;
+            left: 0;
+            right: 0;
+            font-size: 0.55rem;
+            color: var(--accent3);
+            white-space: nowrap;
+            overflow: hidden;
+            text-align: center;
+            letter-spacing: 0.1rem;
+        }
+
+        .neo-box::after {
+            content: '└────────────────────────────────────────────────────────────────┘';
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+            white-space: nowrap;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 3px solid var(--border);
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+            position: relative;
+        }
+
+        .header::after {
+            content: 'RETRIEVAL';
+            position: absolute;
+            right: 0;
+            top: 0;
+            font-size: 0.6rem;
+            color: #444;
+        }
+
+        .header-icon {
+            font-size: 1.8rem;
+            color: var(--accent2);
+            animation: pulse 2s infinite;
+            text-shadow: 0 0 10px var(--accent2);
+        }
+
+        h1 { 
+            margin: 0; 
+            letter-spacing: -1px; 
+            font-size: 1.3rem;
+        }
+
+        .terminal-line {
+            font-size: 0.65rem;
+            color: #0f0;
+            margin-bottom: 15px;
+            padding: 8px 12px;
+            background: #000;
+            border-left: 3px solid #0f0;
+            font-family: monospace;
+        }
+
+        .terminal-line::before {
+            content: '> ';
+            color: var(--accent3);
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.65rem;
+            color: #555;
+            margin-bottom: 25px;
+            padding: 10px 12px;
+            background: #000;
+            border: 1px solid #222;
+            position: relative;
+        }
+
+        .status-bar::before {
+            content: '◈';
+            position: absolute;
+            left: -8px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--accent3);
+            font-size: 0.8rem;
+        }
+
+        .status-bar .ready { color: #0f0; animation: blink 1s step-end infinite; }
+        .status-bar .ready::before { content: '● '; }
+
+        .file-icon {
+            text-align: center;
+            font-size: 4rem;
+            margin: 25px 0;
+            color: var(--accent);
+            text-shadow: 0 0 30px var(--accent);
+            position: relative;
+        }
+
+        .file-icon::before {
+            content: '◢━━━◣';
+            position: absolute;
+            top: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.6rem;
+            color: #333;
+        }
+
+        .file-icon::after {
+            content: '◥━━━◤';
+            position: absolute;
+            bottom: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.6rem;
+            color: #333;
+        }
+
+        .file-name {
+            text-align: center;
+            font-size: 1rem;
+            font-weight: bold;
+            word-break: break-all;
+            padding: 15px 20px;
+            background: #000;
+            border: 2px solid var(--accent);
+            margin-bottom: 25px;
+            color: var(--accent);
+            box-shadow: 0 0 15px rgba(176, 38, 255, 0.2);
+        }
+
+        .file-name::before { content: '>> '; color: var(--accent3); }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 25px;
+        }
+
+        .meta-item {
+            background: #080808;
+            border: 2px solid #333;
+            padding: 14px;
+            position: relative;
+        }
+
+        .meta-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--accent3);
+        }
+
+        .meta-item::after {
+            content: '◈';
+            position: absolute;
+            top: 5px;
+            right: 8px;
+            font-size: 0.5rem;
+            color: #333;
+        }
+
+        .meta-label {
+            font-size: 0.6rem;
+            color: var(--accent3);
+            text-transform: uppercase;
+            letter-spacing: 0.15rem;
+            margin-bottom: 6px;
+        }
+
+        .meta-label::before { content: '//'; color: #444; margin-right: 4px; }
+
+        .meta-value {
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+
+        .divider {
+            text-align: center;
+            margin: 20px 0;
+            font-size: 0.5rem;
+            color: #333;
+            letter-spacing: 0.3rem;
+        }
+
+        button, a.btn {
             display: block;
+            width: 100%;
+            padding: 18px;
             background: var(--accent);
             color: #000;
-            text-align: center;
-            padding: 18px;
-            text-decoration: none;
-            font-weight: 900;
-            font-size: 1.2rem;
-            border: 2px solid var(--border);
+            border: 3px solid var(--border);
+            font-family: inherit;
+            font-weight: bold;
+            font-size: 1.1rem;
+            cursor: pointer;
             box-shadow: 5px 5px 0 0 var(--border);
-            margin: 30px 0;
-            transition: transform 0.1s;
+            transition: all 0.1s;
+            text-transform: uppercase;
+            letter-spacing: 0.15rem;
+            text-decoration: none;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
         }
-        .btn:hover { background: var(--accent-hover); }
-        .btn:active { transform: translate(2px,2px); box-shadow: 3px 3px 0 0 var(--border); }
-        
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .box { border: 1px solid var(--border); padding: 12px; background: #252525; }
-        .lbl { font-weight: bold; display: block; font-size: 0.75rem; margin-bottom: 8px; text-transform: uppercase; color: #888; }
-        .val { font-weight: bold; font-size: 0.9rem; color: #fff; }
+
+        a.btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+        }
+
+        a.btn:hover::before {
+            animation: shimmer 0.5s forwards;
+        }
+
+        @keyframes shimmer {
+            to { left: 100%; }
+        }
+
+        button:hover, a.btn:hover { 
+            background: var(--accent-hover); 
+            color: #fff;
+            transform: translate(2px, 2px); 
+            box-shadow: 3px 3px 0 0 var(--border); 
+        }
+
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 20px;
+            color: #555;
+            text-decoration: none;
+            font-size: 0.8rem;
+            padding: 12px;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .back-link:hover {
+            color: var(--accent3);
+            border-color: var(--accent3);
+        }
+
+        .footer-decoration {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.5rem;
+            color: #222;
+            letter-spacing: 0.3rem;
+        }
+
+        .corner-decoration {
+            position: absolute;
+            font-size: 1.5rem;
+            color: var(--accent2);
+            opacity: 0.2;
+        }
+        .corner-decoration.tl { top: -35px; left: -15px; }
+        .corner-decoration.tr { top: -35px; right: -15px; }
+        .corner-decoration.bl { bottom: -35px; left: -15px; }
+        .corner-decoration.br { bottom: -35px; right: -15px; }
+
+        .warning-box {
+            background: rgba(255, 107, 53, 0.1);
+            border: 2px solid var(--accent2);
+            padding: 14px;
+            margin-top: 20px;
+            font-size: 0.7rem;
+            text-align: center;
+            color: var(--accent2);
+            position: relative;
+        }
+
+        .warning-box::before {
+            content: '◈ ';
+            animation: blink 0.5s step-end infinite;
+        }
+
+        .warning-box::after {
+            content: ' ◈';
+            animation: blink 0.5s step-end infinite;
+        }
+
+        .hacker-text {
+            font-size: 0.55rem;
+            color: #1a1a1a;
+            text-align: center;
+            margin-top: 15px;
+            letter-spacing: 0.2rem;
+        }
+
+        .mode-toggle {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            width: 8px;
+            height: 8px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            opacity: 0;
+        }
+
+        .mode-toggle:hover { opacity: 0.1; background: var(--accent); }
+
+        body.minimal { background: #111 !important; }
+        body.minimal::before, body.minimal::after { display: none !important; }
+        body.minimal .side-text,
+        body.minimal .float-decor,
+        body.minimal .corner-decoration,
+        body.minimal .terminal-line,
+        body.minimal .hacker-text,
+        body.minimal .footer-decoration,
+        body.minimal .status-bar::before { display: none !important; }
+        body.minimal .neo-box::before,
+        body.minimal .neo-box::after,
+        body.minimal .file-icon::before,
+        body.minimal .file-icon::after,
+        body.minimal .meta-item::after { display: none !important; }
+        body.minimal .neo-box { 
+            box-shadow: 6px 6px 0 0 var(--border) !important;
+            background: #1a1a1a !important;
+        }
+        body.minimal h1 { animation: none !important; text-shadow: none !important; }
+        body.minimal .meta-label::before { display: none !important; }
+        body.minimal .file-name::before { display: none !important; }
+        body.minimal .warning-box::before,
+        body.minimal .warning-box::after { display: none !important; }
     </style>
 </head>
-<body>
-    <div class="neo-box">
-        <h2 id="safe-name">...</h2>
-        
-        <a class="btn" href="/d/{{token}}">DOWNLOAD_DATA</a>
-        
-        <div class="grid">
-            <div class="box">
-                <span class="lbl">SIZE</span>
-                <span class="val" id="sz">{{size}}</span>
+<body class="minimal">
+    <div class="float-decor">◈</div>
+    <div class="float-decor">◇</div>
+    <div class="float-decor">⬡</div>
+    <div class="float-decor">◆</div>
+
+    <div class="side-text left">ENCRYPTED FILE DOWNLOAD ◈ PRIVATE ◈ SECURE</div>
+    <div class="side-text right">END-TO-END ENCRYPTION ◈ AUTO-EXPIRING LINKS</div>
+
+    <div class="container">
+        <span class="corner-decoration tl">▛</span>
+        <span class="corner-decoration tr">▜</span>
+        <div class="neo-box">
+            <div class="header">
+                <h1>FILE DOWNLOAD</h1>
             </div>
-            <div class="box">
-                <span class="lbl">EXPIRES</span>
-                <span class="val ts">{{expires}}</span>
+            
+            
+            
+            
+
+            <div class="file-icon">◆</div>
+
+            <div class="file-name">{{name}}</div>
+
+            <div class="meta-grid">
+                <div class="meta-item">
+                    <div class="meta-label">FILE SIZE</div>
+                    <div class="meta-value">{{size}}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">DOWNLOADS</div>
+                    <div class="meta-value">{{downloads}}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">UPLOADED</div>
+                    <div class="meta-value" id="uploaded">{{uploaded}}</div>
+                </div>
+                <div class="meta-item">
+                    <div class="meta-label">EXPIRES</div>
+                    <div class="meta-value" id="expires">{{expires}}</div>
+                </div>
             </div>
-            <div class="box" style="grid-column:span 2">
-                <span class="lbl">TOKEN_ID</span>
-                <span class="val" style="font-size:0.8rem; font-family: monospace;">{{token}}</span>
+
+            <div class="divider">══════════════════════════════════════════</div>
+
+            <a href="/d/{{token}}" class="btn">▶ DOWNLOAD FILE</a>
+
+            <a href="/" class="back-link">◄ BACK TO UPLOAD</a>
+
+            <div class="warning-box">
+                Expires in <strong>{{ttl_days}} days</strong> — download before deletion
             </div>
+
+            
+
+            <div class="footer-decoration">═══════════════════════════════════════════</div>
         </div>
+        <span class="corner-decoration bl">▙</span>
+        <span class="corner-decoration br">▟</span>
     </div>
-    
-    <div id="raw" style="display:none;">{{filename}}</div>
+
+    <button class="mode-toggle" id="mode-toggle" title="Toggle minimal mode"></button>
 
     <script nonce="{{nonce}}">
-        // Safe Text Extraction
-        const raw = document.getElementById('raw').textContent;
-        document.getElementById('safe-name').innerText = raw;
-        document.title = raw;
+        const formatDate = (iso) => {
+            const d = new Date(iso);
+            return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        };
+        document.getElementById('uploaded').innerText = formatDate('{{uploaded}}');
+        document.getElementById('expires').innerText = formatDate('{{expires}}');
 
-        // Formatting
-        document.querySelectorAll('.ts').forEach(el => {
-            el.innerText = new Date(parseInt(el.innerText) * 1000).toLocaleString();
+        // Secret mode toggle (click or press M)
+        const toggleMinimal = () => {
+            document.body.classList.toggle('minimal');
+            localStorage.setItem('minimalMode', document.body.classList.contains('minimal'));
+        };
+        document.getElementById('mode-toggle').addEventListener('click', toggleMinimal);
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'm' || e.key === 'M') {
+                toggleMinimal();
+            }
         });
-        
-        const el = document.getElementById('sz');
-        let s = parseInt(el.innerText), u = ['B','KB','MB','GB'], i = 0;
-        while(s >= 1024 && i < 3) { s /= 1024; i++; }
-        el.innerText = s.toFixed(2) + ' ' + u[i];
+
+        if (localStorage.getItem('minimalMode') === 'true') {
+            document.body.classList.add('minimal');
+        }
     </script>
 </body>
 </html>

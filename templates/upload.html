@@ -7,108 +7,523 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; form-action 'self'; base-uri 'self';">
     <style>
         :root {
-            --bg: #121212;
-            --card: #1E1E1E;
+            --bg: #0a0a0a;
+            --card: #0d0d0d;
             --text: #E0E0E0;
             --border: #FFFFFF;
-            --accent: #B026FF; /* Neon Purple */
+            --accent: #B026FF;
             --accent-hover: #9000FF;
+            --accent2: #FF6B35;
+            --accent3: #00D4FF;
+            --glow: #B026FF;
             --font: 'Courier New', monospace;
         }
         * { box-sizing: border-box; }
-        body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font-family:var(--font); padding:20px; }
+
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100vh); }
+        }
+
+        @keyframes glitch {
+            0%, 100% { text-shadow: 2px 0 var(--accent2), -2px 0 var(--accent3); }
+            25% { text-shadow: -2px 0 var(--accent2), 2px 0 var(--accent3); }
+            50% { text-shadow: 2px 2px var(--accent2), -2px -2px var(--accent3); }
+            75% { text-shadow: -2px 2px var(--accent2), 2px -2px var(--accent3); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-5px); }
+        }
+
+        body { 
+            margin: 0; 
+            min-height: 100vh; 
+            display: grid; 
+            place-items: center; 
+            background: var(--bg); 
+            color: var(--text); 
+            font-family: var(--font); 
+            padding: 20px;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 20px 20px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent3), transparent);
+            animation: scanline 6s linear infinite;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0.15;
+        }
+
+        .container { position: relative; z-index: 1; }
+
+        /* Rotated side text */
+        .side-text {
+            position: fixed;
+            font-size: 0.6rem;
+            color: #222;
+            letter-spacing: 0.3rem;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .side-text.left {
+            left: 20px;
+            top: 50%;
+            transform: rotate(-90deg) translateX(-50%);
+            transform-origin: left center;
+        }
+
+        .side-text.right {
+            right: 20px;
+            top: 50%;
+            transform: rotate(90deg) translateX(50%);
+            transform-origin: right center;
+        }
+
+        /* Floating decoration elements */
+        .float-decor {
+            position: fixed;
+            font-size: 1.5rem;
+            color: var(--accent);
+            opacity: 0.15;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        .float-decor:nth-child(1) { top: 10%; left: 5%; animation-delay: 0s; }
+        .float-decor:nth-child(2) { top: 20%; right: 8%; animation-delay: 0.5s; }
+        .float-decor:nth-child(3) { bottom: 15%; left: 10%; animation-delay: 1s; }
+        .float-decor:nth-child(4) { bottom: 25%; right: 5%; animation-delay: 1.5s; }
 
         .neo-box {
             background: var(--card);
-            border: 2px solid var(--border);
-            box-shadow: 6px 6px 0 0 var(--border);
-            padding: 30px;
-            width: min(450px, 95vw);
+            border: 3px solid var(--border);
+            box-shadow: 
+                8px 8px 0 0 var(--border),
+                0 0 30px rgba(176, 38, 255, 0.1);
+            padding: 35px;
+            width: min(500px, 95vw);
+            position: relative;
         }
 
-        h1 { margin-top:0; border-bottom: 2px solid var(--border); padding-bottom: 15px; letter-spacing: -1px; }
+        .neo-box::before {
+            content: '┌─────────────────────────────────────────────────────────────────┐';
+            position: absolute;
+            top: -30px;
+            left: 0;
+            right: 0;
+            font-size: 0.55rem;
+            color: var(--accent3);
+            white-space: nowrap;
+            overflow: hidden;
+            text-align: center;
+            letter-spacing: 0.1rem;
+        }
+
+        .neo-box::after {
+            content: '└────────────────────────────────────────────────────────────────┘';
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+            white-space: nowrap;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 3px solid var(--border);
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+            position: relative;
+        }
+
+        .header::after {
+            content: 'v2.4.1';
+            position: absolute;
+            right: 0;
+            top: 0;
+            font-size: 0.6rem;
+            color: #444;
+        }
+
+        .header-icon {
+            font-size: 1.8rem;
+            animation: pulse 2s infinite;
+            text-shadow: 0 0 10px var(--accent);
+        }
+
+        h1 { 
+            margin: 0; 
+            letter-spacing: -1px; 
+            font-size: 1.3rem;
+        }
+
+        .terminal-line {
+            font-size: 0.65rem;
+            color: #0f0;
+            margin-bottom: 15px;
+            padding: 8px 12px;
+            background: #000;
+            border-left: 3px solid #0f0;
+            font-family: monospace;
+        }
+
+        .terminal-line::before {
+            content: '> ';
+            color: var(--accent3);
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.65rem;
+            color: #555;
+            margin-bottom: 20px;
+            padding: 10px 12px;
+            background: #000;
+            border: 1px solid #222;
+            position: relative;
+        }
+
+        .status-bar::before {
+            content: '◈';
+            position: absolute;
+            left: -8px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--accent);
+            font-size: 0.8rem;
+        }
+
+        .status-bar .online { color: #0f0; animation: blink 1s step-end infinite; }
+        .status-bar .online::before { content: '● '; }
 
         .p2p-link {
-            display: block;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
             text-align: center;
             margin-bottom: 20px;
-            padding: 12px;
-            background: #FF6B35;
+            padding: 18px;
+            background: linear-gradient(135deg, var(--accent2), #FF8C5A);
             color: #000;
             text-decoration: none;
             font-weight: bold;
-            border: 2px solid var(--border);
-            box-shadow: 4px 4px 0 0 var(--border);
+            font-size: 0.9rem;
+            border: 3px solid var(--border);
+            box-shadow: 5px 5px 0 0 var(--border);
+            text-transform: uppercase;
+            letter-spacing: 0.08rem;
+            transition: all 0.1s;
+            position: relative;
+            overflow: hidden;
         }
-        .p2p-link:hover { background: #00D4FF; }
 
-        label { display: block; margin-bottom: 8px; font-weight: bold; font-size: 0.9rem; color: var(--accent); }
+        .p2p-link::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            transition: left 0.5s;
+        }
+
+        .p2p-link:hover::before { left: 100%; }
+
+        .p2p-link:hover { 
+            background: var(--accent3); 
+            transform: translate(2px, 2px);
+            box-shadow: 3px 3px 0 0 var(--border);
+        }
+
+        .divider {
+            text-align: center;
+            margin: 20px 0;
+            font-size: 0.6rem;
+            color: #444;
+            position: relative;
+        }
+
+        .divider::before { content: '◄◄◄ '; color: var(--accent); }
+        .divider::after { content: ' ►►►'; color: var(--accent); }
+
+        label { 
+            display: block; 
+            margin-bottom: 8px; 
+            font-weight: bold; 
+            font-size: 0.8rem; 
+            color: var(--accent3);
+            text-transform: uppercase;
+            letter-spacing: 0.15rem;
+        }
+
+        label::before { content: '//'; color: #444; margin-right: 5px; }
 
         select, button {
             width: 100%;
-            padding: 15px;
+            padding: 16px;
             margin-bottom: 20px;
-            background: #2A2A2A;
+            background: #0a0a0a;
             color: var(--text);
-            border: 2px solid var(--border);
+            border: 3px solid var(--border);
             font-family: inherit;
             font-weight: bold;
             font-size: 1rem;
             cursor: pointer;
-            box-shadow: 4px 4px 0 0 var(--border);
+            box-shadow: 5px 5px 0 0 var(--border);
+            transition: all 0.1s;
         }
 
-        select:focus, button:focus { outline: none; transform: translate(2px, 2px); box-shadow: 2px 2px 0 0 var(--border); }
+        select:focus, button:focus { 
+            outline: none; 
+            transform: translate(2px, 2px); 
+            box-shadow: 3px 3px 0 0 var(--border); 
+        }
 
-        button { background: var(--accent); color: #000; text-transform: uppercase; font-size: 1.1rem; }
+        button { 
+            background: var(--accent); 
+            color: #000; 
+            text-transform: uppercase; 
+            font-size: 1.1rem;
+            letter-spacing: 0.15rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+        }
+
+        button:hover::before { animation: shimmer 0.5s forwards; }
+
+        @keyframes shimmer {
+            to { left: 100%; }
+        }
+
         button:hover { background: var(--accent-hover); color: #fff; }
 
         #drop-zone {
-            border: 2px dashed var(--border);
-            background: #252525;
-            padding: 40px 20px;
+            border: 3px dashed var(--border);
+            background: #080808;
+            padding: 50px 20px;
             text-align: center;
             margin-bottom: 25px;
             cursor: pointer;
             transition: all 0.2s;
+            position: relative;
         }
 
-        #drop-zone.hover { background: var(--accent); color: #000; border-style: solid; }
+        #drop-zone::before {
+            content: '◢━━━━━━━━━━━━━━◣';
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+        }
+
+        #drop-zone::after {
+            content: '◥━━━━━━━━━━━━━━◤';
+            position: absolute;
+            bottom: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+        }
+
+        #drop-zone.hover { 
+            background: var(--accent); 
+            color: #000; 
+            border-style: solid;
+            box-shadow: 0 0 30px var(--accent);
+        }
+
+        #lbl { font-size: 0.95rem; line-height: 2; }
 
         #file-display {
             display: none;
             margin-top: 15px;
-            padding: 10px;
+            padding: 12px;
             background: #000;
-            border: 1px solid var(--border);
+            border: 2px solid var(--accent);
             color: var(--accent);
             word-break: break-all;
+            font-size: 0.85rem;
+            box-shadow: 0 0 10px rgba(176, 38, 255, 0.3);
         }
+
+        .footer-decoration {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.5rem;
+            color: #222;
+            letter-spacing: 0.3rem;
+        }
+
+        .corner-decoration {
+            position: absolute;
+            font-size: 1.5rem;
+            color: var(--accent);
+            opacity: 0.2;
+        }
+        .corner-decoration.tl { top: -35px; left: -15px; }
+        .corner-decoration.tr { top: -35px; right: -15px; }
+        .corner-decoration.bl { bottom: -35px; left: -15px; }
+        .corner-decoration.br { bottom: -35px; right: -15px; }
+
+        .hacker-text {
+            font-size: 0.55rem;
+            color: #1a1a1a;
+            text-align: center;
+            margin-top: 15px;
+            letter-spacing: 0.2rem;
+        }
+
+        /* Secret toggle */
+        .mode-toggle {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            width: 8px;
+            height: 8px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            opacity: 0;
+        }
+
+        .mode-toggle:hover { opacity: 0.1; background: var(--accent); }
+
+        /* Minimalist mode */
+        body.minimal { background: #111 !important; }
+        body.minimal::before, body.minimal::after { display: none !important; }
+        body.minimal .side-text,
+        body.minimal .float-decor,
+        body.minimal .corner-decoration,
+        body.minimal .terminal-line,
+        body.minimal .hacker-text,
+        body.minimal .footer-decoration,
+        body.minimal .status-bar::before { display: none !important; }
+        body.minimal .neo-box::before,
+        body.minimal .neo-box::after,
+        body.minimal #drop-zone::before,
+        body.minimal #drop-zone::after { display: none !important; }
+        body.minimal .neo-box { 
+            box-shadow: 6px 6px 0 0 var(--border) !important;
+            background: #1a1a1a !important;
+        }
+        body.minimal h1 { animation: none !important; text-shadow: none !important; }
+        body.minimal label::before { display: none !important; }
+        body.minimal .divider::before,
+        body.minimal .divider::after { display: none !important; }
     </style>
 </head>
-<body>
-    <div class="neo-box">
-        <h1>>>> ENCRYPT_UPLOAD</h1>
-        
-        <a href="/p2p" class="p2p-link">⚡ P2P DIRECT TRANSFER (No server storage)</a>
-        
-        <form action="/u" method="post" enctype="multipart/form-data">
-            <label>EXPIRATION_TTL:</label>
-            <select name="ttl">
-                <option value="1">1 Day</option>
-                <option value="7" selected>7 Days</option>
-                <option value="30">30 Days</option>
-            </select>
+<body class="minimal">
+    <!-- Floating decorations -->
+    <div class="float-decor">◈</div>
+    <div class="float-decor">◇</div>
+    <div class="float-decor">⬡</div>
+    <div class="float-decor">◆</div>
 
-            <div id="drop-zone">
-                <span id="lbl">[ DROP FILE HERE ]<br><br>OR CLICK TO BROWSE</span>
-                <input type="file" name="file" id="f" required style="display:none"/>
-                <div id="file-display"></div>
+    <!-- Side decorations -->
+    <div class="side-text left">ENCRYPTED FILE SHARING ◈ PRIVATE ◈ SECURE</div>
+    <div class="side-text right">END-TO-END ENCRYPTION ◈ AUTO-EXPIRING LINKS</div>
+
+    <div class="container">
+        <span class="corner-decoration tl">▛</span>
+        <span class="corner-decoration tr">▜</span>
+        <div class="neo-box">
+            <div class="header">
+                <h1>SECURE DROP</h1>
             </div>
+            
+            
+            
+            
+            
+            <a href="/p2p" class="p2p-link">
+                <span>⚡</span>
+                <span>P2P DIRECT TRANSFER</span>
+                <span style="font-size:0.6rem; opacity:0.8;">[NO SERVER STORAGE]</span>
+            </a>
+            
+            <div class="divider">OR UPLOAD TO SERVER</div>
+            
+            <form action="/u" method="post" enctype="multipart/form-data">
+                <label>EXPIRATION:</label>
+                <select name="ttl">
+                    <option value="1">[ 24 HOURS ]</option>
+                    <option value="7" selected>[ 7 DAYS ]</option>
+                    <option value="30">[ 30 DAYS ]</option>
+                </select>
 
-            <button type="submit">INITIATE SEQUENCE</button>
-        </form>
+                <div id="drop-zone">
+                    <span id="lbl">◇ DROP FILE HERE ◇<br><br>━━ OR CLICK TO BROWSE ━━</span>
+                    <input type="file" name="file" id="f" required style="display:none"/>
+                    <div id="file-display"></div>
+                </div>
+
+                <button type="submit">▶ UPLOAD FILE</button>
+            </form>
+            
+            
+            
+            <div class="footer-decoration">═══════════════════════════════════════════</div>
+        </div>
+        <span class="corner-decoration bl">▙</span>
+        <span class="corner-decoration br">▟</span>
     </div>
+
+    <button class="mode-toggle" id="mode-toggle" title="Toggle minimal mode"></button>
 
     <script nonce="{{nonce}}">
         const d = document.getElementById('drop-zone');
@@ -118,8 +533,8 @@
 
         const update = (file) => {
             const dT = new DataTransfer(); dT.items.add(file); f.files = dT.files;
-            lbl.innerText = ">> TARGET LOCKED <<";
-            n.innerText = file.name;
+            lbl.innerText = "◆ FILE SELECTED ◆";
+            n.innerText = '>> ' + file.name;
             n.style.display = 'block';
             d.style.borderStyle = 'solid';
             d.style.borderColor = 'var(--accent)';
@@ -130,6 +545,25 @@
         d.addEventListener('drop', (e) => { if(e.dataTransfer.files[0]) update(e.dataTransfer.files[0]); });
         d.addEventListener('click', () => f.click());
         f.addEventListener('change', () => { if(f.files[0]) update(f.files[0]); });
+
+        // Secret mode toggle (click or press M)
+        const toggleMinimal = () => {
+            document.body.classList.toggle('minimal');
+            localStorage.setItem('minimalMode', document.body.classList.contains('minimal'));
+        };
+        document.getElementById('mode-toggle').addEventListener('click', toggleMinimal);
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'm' || e.key === 'M') {
+                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                    toggleMinimal();
+                }
+            }
+        });
+
+        // Restore mode preference
+        if (localStorage.getItem('minimalMode') === 'true') {
+            document.body.classList.add('minimal');
+        }
     </script>
 </body>
 </html>

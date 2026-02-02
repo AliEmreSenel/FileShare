@@ -3,149 +3,672 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>P2P Transfer</title>
+    <title>P2P Transfer - Secure Drop</title>
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}' https://unpkg.com; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; base-uri 'self';">
     <script nonce="{{nonce}}" src="https://unpkg.com/qrcode-generator@2.0.4/dist/qrcode.js"></script>
     <style>
         :root {
-            --bg: #121212;
-            --card: #1E1E1E;
+            --bg: #0a0a0a;
+            --card: #0d0d0d;
             --text: #E0E0E0;
             --border: #FFFFFF;
-            --accent: #FF6B35;
-            --accent2: #00D4FF;
+            --accent: #B026FF;
+            --accent-hover: #9000FF;
+            --accent2: #FF6B35;
+            --accent3: #00D4FF;
             --font: 'Courier New', monospace;
         }
         * { box-sizing: border-box; }
-        body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font-family:var(--font); padding:20px; }
+
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100vh); }
+        }
+
+        @keyframes glitch {
+            0%, 100% { text-shadow: 2px 0 var(--accent2), -2px 0 var(--accent3); }
+            25% { text-shadow: -2px 0 var(--accent2), 2px 0 var(--accent3); }
+            50% { text-shadow: 2px 2px var(--accent2), -2px -2px var(--accent3); }
+            75% { text-shadow: -2px 2px var(--accent2), 2px -2px var(--accent3); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-5px); }
+        }
+
+        @keyframes codeGlow {
+            0%, 100% { box-shadow: 5px 5px 0 0 var(--accent2), 0 0 20px rgba(255, 107, 53, 0.3); }
+            50% { box-shadow: 5px 5px 0 0 var(--accent2), 0 0 40px rgba(255, 107, 53, 0.5); }
+        }
+
+        body { 
+            margin: 0; 
+            min-height: 100vh; 
+            display: grid; 
+            place-items: center; 
+            background: var(--bg); 
+            color: var(--text); 
+            font-family: var(--font); 
+            padding: 20px;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 20px 20px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent2), transparent);
+            animation: scanline 6s linear infinite;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0.15;
+        }
+
+        .container { position: relative; z-index: 1; }
+
+        .side-text {
+            position: fixed;
+            font-size: 0.6rem;
+            color: #222;
+            letter-spacing: 0.3rem;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .side-text.left {
+            left: 20px;
+            top: 50%;
+            transform: rotate(-90deg) translateX(-50%);
+            transform-origin: left center;
+        }
+
+        .side-text.right {
+            right: 20px;
+            top: 50%;
+            transform: rotate(90deg) translateX(50%);
+            transform-origin: right center;
+        }
+
+        .float-decor {
+            position: fixed;
+            font-size: 1.5rem;
+            color: var(--accent2);
+            opacity: 0.15;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        .float-decor:nth-child(1) { top: 10%; left: 5%; animation-delay: 0s; }
+        .float-decor:nth-child(2) { top: 20%; right: 8%; animation-delay: 0.5s; }
+        .float-decor:nth-child(3) { bottom: 15%; left: 10%; animation-delay: 1s; }
+        .float-decor:nth-child(4) { bottom: 25%; right: 5%; animation-delay: 1.5s; }
+
         .neo-box {
             background: var(--card);
-            border: 2px solid var(--border);
-            box-shadow: 6px 6px 0 0 var(--border);
-            padding: 30px;
-            width: min(500px, 95vw);
+            border: 3px solid var(--border);
+            box-shadow: 
+                8px 8px 0 0 var(--border),
+                0 0 30px rgba(255, 107, 53, 0.1);
+            padding: 35px;
+            width: min(540px, 95vw);
+            position: relative;
         }
-        h1 { margin-top:0; border-bottom: 2px solid var(--border); padding-bottom: 15px; }
+
+        .neo-box::before {
+            content: '[ P2P::ACTIVE ] ─── [ WEBRTC::ENABLED ] ─── [ E2E::ENCRYPTED ]';
+            position: absolute;
+            top: -30px;
+            left: 0;
+            right: 0;
+            font-size: 0.55rem;
+            color: var(--accent2);
+            white-space: nowrap;
+            overflow: hidden;
+            text-align: center;
+            letter-spacing: 0.1rem;
+        }
+
+        .neo-box::after {
+            content: '└────────────────────────────────────────────────────────────────┘';
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+            white-space: nowrap;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 3px solid var(--border);
+            padding-bottom: 15px;
+            margin-bottom: 15px;
+            position: relative;
+        }
+
+        .header::after {
+            content: 'DIRECT';
+            position: absolute;
+            right: 0;
+            top: 0;
+            font-size: 0.6rem;
+            color: #444;
+        }
+
+        .header-icon {
+            font-size: 1.8rem;
+            color: var(--accent2);
+            animation: pulse 2s infinite;
+            text-shadow: 0 0 10px var(--accent2);
+        }
+
+        h1 { 
+            margin: 0; 
+            letter-spacing: -1px; 
+            font-size: 1.3rem;
+        }
+
+        .terminal-line {
+            font-size: 0.65rem;
+            color: #0f0;
+            margin-bottom: 15px;
+            padding: 8px 12px;
+            background: #000;
+            border-left: 3px solid #0f0;
+            font-family: monospace;
+        }
+
+        .terminal-line::before {
+            content: '> ';
+            color: var(--accent3);
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.65rem;
+            color: #555;
+            margin-bottom: 20px;
+            padding: 10px 12px;
+            background: #000;
+            border: 1px solid #222;
+            position: relative;
+        }
+
+        .status-bar::before {
+            content: '⚡';
+            position: absolute;
+            left: -8px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--accent2);
+            font-size: 0.8rem;
+        }
+
+        .status-bar .online { color: #0f0; animation: blink 1s step-end infinite; }
+        .status-bar .online::before { content: '● '; }
+
         .code-display {
             font-size: 2.5rem;
-            letter-spacing: 0.5rem;
+            letter-spacing: 0.6rem;
             text-align: center;
-            padding: 20px;
+            padding: 22px;
             background: #000;
-            border: 2px solid var(--accent);
+            border: 3px solid var(--accent2);
             margin: 20px 0;
             font-weight: bold;
-            color: var(--accent);
+            color: var(--accent2);
+            animation: codeGlow 2s infinite;
+            position: relative;
         }
-        label { display: block; margin-bottom: 8px; font-weight: bold; font-size: 0.9rem; color: var(--accent2); }
+
+        .code-display::before {
+            content: '◢━━━━━◣';
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+        }
+
+        .code-display::after {
+            content: '◥━━━━━◤';
+            position: absolute;
+            bottom: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+        }
+
+        label { 
+            display: block; 
+            margin-bottom: 8px; 
+            font-weight: bold; 
+            font-size: 0.8rem; 
+            color: var(--accent3);
+            text-transform: uppercase;
+            letter-spacing: 0.15rem;
+        }
+
+        label::before { content: '//'; color: #444; margin-right: 5px; }
+
         input, button {
             width: 100%;
-            padding: 15px;
+            padding: 16px;
             margin-bottom: 15px;
-            background: #2A2A2A;
+            background: #0a0a0a;
             color: var(--text);
-            border: 2px solid var(--border);
+            border: 3px solid var(--border);
             font-family: inherit;
             font-weight: bold;
             font-size: 1rem;
-            box-shadow: 4px 4px 0 0 var(--border);
+            box-shadow: 5px 5px 0 0 var(--border);
+            transition: all 0.1s;
         }
-        input:focus { outline: 2px solid var(--accent2); }
-        button { background: var(--accent); color: #000; text-transform: uppercase; cursor: pointer; }
-        button:hover { background: var(--accent2); }
+
+        input:focus { 
+            outline: none; 
+            border-color: var(--accent3); 
+            box-shadow: 5px 5px 0 0 var(--accent3); 
+        }
+
+        button { 
+            background: var(--accent); 
+            color: #000; 
+            text-transform: uppercase; 
+            cursor: pointer;
+            letter-spacing: 0.15rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+        }
+
+        button:hover::before { animation: shimmer 0.5s forwards; }
+
+        @keyframes shimmer {
+            to { left: 100%; }
+        }
+
+        button:hover { background: var(--accent-hover); color: #fff; }
         button:disabled { opacity: 0.5; cursor: not-allowed; }
+
         #drop-zone {
-            border: 2px dashed var(--border);
-            background: #252525;
-            padding: 30px;
+            border: 3px dashed var(--border);
+            background: #080808;
+            padding: 40px 20px;
             text-align: center;
             margin-bottom: 20px;
             cursor: pointer;
+            position: relative;
+            transition: all 0.2s;
         }
-        #drop-zone.hover { background: var(--accent); color: #000; border-style: solid; }
-        .status { padding: 15px; margin: 15px 0; border: 1px solid var(--border); background: #000; }
+
+        #drop-zone::before {
+            content: '◢━━━━━━━━━━━━━━◣';
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+        }
+
+        #drop-zone::after {
+            content: '◥━━━━━━━━━━━━━━◤';
+            position: absolute;
+            bottom: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.5rem;
+            color: #333;
+        }
+
+        #drop-zone.hover { 
+            background: var(--accent); 
+            color: #000; 
+            border-style: solid;
+            box-shadow: 0 0 30px var(--accent);
+        }
+
+        .status { 
+            padding: 15px; 
+            margin: 15px 0; 
+            border: 2px solid var(--border); 
+            background: #000; 
+            font-size: 0.85rem;
+        }
         .status.success { border-color: #0f0; color: #0f0; }
         .status.error { border-color: #f00; color: #f00; }
-        .progress-bar { width: 100%; height: 20px; background: #333; margin: 10px 0; }
-        .progress-fill { height: 100%; background: var(--accent2); width: 0%; transition: width 0.3s; }
+
+        .progress-bar { 
+            width: 100%; 
+            height: 24px; 
+            background: #0a0a0a; 
+            margin: 10px 0; 
+            border: 2px solid #333;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .progress-bar::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                90deg,
+                transparent,
+                transparent 10px,
+                rgba(255,255,255,0.03) 10px,
+                rgba(255,255,255,0.03) 20px
+            );
+        }
+
+        .progress-fill { 
+            height: 100%; 
+            background: linear-gradient(90deg, var(--accent3), var(--accent)); 
+            width: 0%; 
+            transition: width 0.3s;
+            box-shadow: 0 0 10px var(--accent3);
+        }
+
         .hidden { display: none; }
+
         .tab-btns { display: flex; gap: 10px; margin-bottom: 20px; }
-        .tab-btn { flex: 1; padding: 12px; background: #333; border: 2px solid var(--border); cursor: pointer; text-align: center; font-weight: bold; }
-        .tab-btn.active { background: var(--accent); color: #000; }
+
+        .tab-btn { 
+            flex: 1; 
+            padding: 14px; 
+            background: #0a0a0a; 
+            border: 3px solid var(--border); 
+            cursor: pointer; 
+            text-align: center; 
+            font-weight: bold; 
+            text-transform: uppercase;
+            letter-spacing: 0.08rem;
+            box-shadow: 4px 4px 0 0 var(--border);
+            transition: all 0.1s;
+        }
+
+        .tab-btn:hover {
+            transform: translate(2px, 2px);
+            box-shadow: 2px 2px 0 0 var(--border);
+        }
+
+        .tab-btn.active { 
+            background: var(--accent2); 
+            color: #000; 
+            box-shadow: 4px 4px 0 0 #000;
+        }
+
         .section { display: none; }
         .section.active { display: block; }
-        .back-link { display: block; text-align: center; margin-top: 20px; color: var(--accent2); text-decoration: none; }
-        .back-link:hover { text-decoration: underline; }
+
+        .back-link { 
+            display: block; 
+            text-align: center; 
+            margin-top: 20px; 
+            color: #555; 
+            text-decoration: none;
+            font-size: 0.8rem;
+            padding: 12px;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+        }
+        .back-link:hover { 
+            color: var(--accent3); 
+            border-color: var(--accent3);
+        }
+
         #qr-container { text-align: center; margin: 20px 0; }
+
         #qr-code { 
             display: inline-block; 
             padding: 15px; 
             background: #fff; 
-            border: 2px solid var(--border); 
+            border: 3px solid var(--border); 
             box-shadow: 6px 6px 0 0 var(--border);
         }
         #qr-code svg { display: block; width: 160px; height: 160px; }
+
         #qr-label { 
-            font-size: 0.85rem; 
-            margin-top: 12px; 
-            color: var(--accent2); 
+            font-size: 0.7rem; 
+            margin-top: 15px; 
+            color: var(--accent3); 
             text-transform: uppercase;
-            letter-spacing: 0.1rem;
+            letter-spacing: 0.2rem;
         }
+
+        .footer-decoration {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.5rem;
+            color: #222;
+            letter-spacing: 0.3rem;
+        }
+
+        .corner-decoration {
+            position: absolute;
+            font-size: 1.5rem;
+            color: var(--accent2);
+            opacity: 0.2;
+        }
+        .corner-decoration.tl { top: -35px; left: -15px; }
+        .corner-decoration.tr { top: -35px; right: -15px; }
+        .corner-decoration.bl { bottom: -35px; left: -15px; }
+        .corner-decoration.br { bottom: -35px; right: -15px; }
+
+        #file-name {
+            padding: 12px;
+            background: #000;
+            border: 2px solid var(--accent);
+            color: var(--accent);
+            margin-bottom: 15px;
+            font-size: 0.85rem;
+            word-break: break-all;
+            box-shadow: 0 0 10px rgba(176, 38, 255, 0.2);
+        }
+
+        #file-name::before { content: '>> '; color: var(--accent3); }
+
+        .divider {
+            text-align: center;
+            margin: 15px 0;
+            font-size: 0.5rem;
+            color: #333;
+            letter-spacing: 0.3rem;
+        }
+
+        .hacker-text {
+            font-size: 0.55rem;
+            color: #1a1a1a;
+            text-align: center;
+            margin-top: 10px;
+            letter-spacing: 0.2rem;
+        }
+
+        .mode-toggle {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            width: 8px;
+            height: 8px;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            opacity: 0;
+        }
+
+        .mode-toggle:hover { opacity: 0.1; background: var(--accent); }
+
+        body.minimal { background: #111 !important; }
+        body.minimal::before, body.minimal::after { display: none !important; }
+        body.minimal .side-text,
+        body.minimal .float-decor,
+        body.minimal .corner-decoration,
+        body.minimal .terminal-line,
+        body.minimal .hacker-text,
+        body.minimal .footer-decoration,
+        body.minimal .status-bar::before { display: none !important; }
+        body.minimal .neo-box::before,
+        body.minimal .neo-box::after,
+        body.minimal #drop-zone::before,
+        body.minimal #drop-zone::after,
+        body.minimal .code-display::before,
+        body.minimal .code-display::after { display: none !important; }
+        body.minimal .neo-box { 
+            box-shadow: 6px 6px 0 0 var(--border) !important;
+            background: #1a1a1a !important;
+        }
+        body.minimal h1 { animation: none !important; text-shadow: none !important; }
+        body.minimal label::before { display: none !important; }
+        body.minimal #file-name::before { display: none !important; }
+        body.minimal .code-display { animation: none !important; box-shadow: 5px 5px 0 0 var(--accent2) !important; }
     </style>
 </head>
-<body>
-    <div class="neo-box">
-        <h1>>>> P2P_TRANSFER</h1>
-        
-        <div class="tab-btns">
-            <div class="tab-btn active" data-tab="receive">RECEIVE</div>
-            <div class="tab-btn" data-tab="send">SEND</div>
-        </div>
+<body class="minimal">
+    <div class="float-decor">◈</div>
+    <div class="float-decor">◇</div>
+    <div class="float-decor">⬡</div>
+    <div class="float-decor">◆</div>
 
-        <!-- RECEIVE MODE -->
-        <div id="receive" class="section active">
-            <label>YOUR CODE (share with sender):</label>
-            <div class="code-display" id="my-code">------</div>
-            <div id="qr-container">
-                <div id="qr-code"></div>
-                <div id="qr-label">Scan to open send page</div>
-            </div>
-            <div id="recv-status" class="status hidden"></div>
-            <div id="recv-progress" class="hidden">
-                <label>RECEIVING:</label>
-                <div class="progress-bar"><div class="progress-fill" id="recv-fill"></div></div>
-                <div id="recv-info"></div>
-            </div>
-        </div>
+    <div class="side-text left">PEER-TO-PEER TRANSFER ◈ NO SERVER STORAGE ◈ ENCRYPTED</div>
+    <div class="side-text right">DIRECT BROWSER CONNECTION ◈ END-TO-END ENCRYPTION</div>
 
-        <!-- SEND MODE -->
-        <div id="send" class="section">
-            <label>RECEIVER'S CODE:</label>
-            <input type="text" id="target-code" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}">
-            
-            <div id="drop-zone">
-                <span id="drop-lbl">[ DROP FILE HERE ]<br><br>OR CLICK TO BROWSE</span>
-                <input type="file" id="file-input" style="display:none">
+    <div class="container">
+        <span class="corner-decoration tl">▛</span>
+        <span class="corner-decoration tr">▜</span>
+        <div class="neo-box">
+            <div class="header">
+                <h1>P2P TRANSFER</h1>
             </div>
-            <div id="file-name" class="hidden"></div>
             
-            <button id="send-btn" disabled>SEND FILE</button>
             
-            <div id="send-status" class="status hidden"></div>
-            <div id="send-progress" class="hidden">
-                <label>SENDING:</label>
-                <div class="progress-bar"><div class="progress-fill" id="send-fill"></div></div>
-                <div id="send-info"></div>
+            
+            
+            
+            <div class="tab-btns">
+                <div class="tab-btn active" data-tab="receive">▼ RECEIVE</div>
+                <div class="tab-btn" data-tab="send">▲ SEND</div>
             </div>
-        </div>
 
-        <a href="/" class="back-link">« Back to Upload</a>
+            <!-- RECEIVE MODE -->
+            <div id="receive" class="section active">
+                <label>YOUR CODE:</label>
+                <div class="code-display" id="my-code">------</div>
+                <div id="qr-container">
+                    <div id="qr-code"></div>
+                    <div id="qr-label">◇ Scan to connect ◇</div>
+                </div>
+                <div id="recv-status" class="status hidden"></div>
+                <div id="recv-progress" class="hidden">
+                    <label>RECEIVING:</label>
+                    <div class="progress-bar"><div class="progress-fill" id="recv-fill"></div></div>
+                    <div id="recv-info"></div>
+                </div>
+            </div>
+
+            <!-- SEND MODE -->
+            <div id="send" class="section">
+                <label>RECEIVER'S CODE:</label>
+                <input type="text" id="target-code" placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}">
+                
+                <div id="drop-zone">
+                    <span id="drop-lbl">◇ DROP FILE HERE ◇<br><br>━━ OR CLICK TO SELECT ━━</span>
+                    <input type="file" id="file-input" style="display:none">
+                </div>
+                <div id="file-name" class="hidden"></div>
+                
+                <button id="send-btn" disabled>▶ SEND FILE</button>
+                
+                <div id="send-status" class="status hidden"></div>
+                <div id="send-progress" class="hidden">
+                    <label>SENDING:</label>
+                    <div class="progress-bar"><div class="progress-fill" id="send-fill"></div></div>
+                    <div id="send-info"></div>
+                </div>
+            </div>
+
+            <div class="divider">══════════════════════════════════════════</div>
+
+            <a href="/" class="back-link">◄ BACK TO MAIN</a>
+
+            
+            
+            <div class="footer-decoration">═══════════════════════════════════════════</div>
+        </div>
+        <span class="corner-decoration bl">▙</span>
+        <span class="corner-decoration br">▟</span>
     </div>
+
+    <button class="mode-toggle" id="mode-toggle" title="Toggle minimal mode"></button>
 
     <script nonce="{{nonce}}">
     (function () {
         'use strict';
+
+        // Secret mode toggle (click or press M)
+        const toggleMinimal = () => {
+            document.body.classList.toggle('minimal');
+            localStorage.setItem('minimalMode', document.body.classList.contains('minimal'));
+        };
+        document.getElementById('mode-toggle').addEventListener('click', toggleMinimal);
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'm' || e.key === 'M') {
+                if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                    toggleMinimal();
+                }
+            }
+        });
+
+        if (localStorage.getItem('minimalMode') === 'true') {
+            document.body.classList.add('minimal');
+        }
 
         // --- QR Code Generator using external qrcode-generator library ---
         function generateQR(text) {
@@ -329,7 +852,7 @@
 
         function selectFile(file) {
             selectedFile = file;
-            document.getElementById('drop-lbl').textContent = '>> FILE SELECTED <<';
+            document.getElementById('drop-lbl').textContent = '◆ FILE SELECTED ◆';
             const fn = document.getElementById('file-name');
             fn.textContent = file.name + ' (' + formatSize(file.size) + ')';
             fn.classList.remove('hidden');
