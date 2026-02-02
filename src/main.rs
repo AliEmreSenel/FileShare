@@ -151,10 +151,7 @@ async fn show_p2p() -> Html<String> {
 }
 
 // --- WebSocket Signaling for P2P ---
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state.peers.clone()))
 }
 
@@ -407,4 +404,3 @@ impl IntoResponse for AppError {
         (status, msg.to_string()).into_response()
     }
 }
-

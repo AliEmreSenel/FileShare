@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>P2P Transfer</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; base-uri 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{nonce}}' https://unpkg.com; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; base-uri 'self';">
+    <script nonce="{{nonce}}" src="https://unpkg.com/qrcode-generator@2.0.4/dist/qrcode.js"></script>
     <style>
         :root {
             --bg: #121212;
@@ -75,6 +76,22 @@
         .section.active { display: block; }
         .back-link { display: block; text-align: center; margin-top: 20px; color: var(--accent2); text-decoration: none; }
         .back-link:hover { text-decoration: underline; }
+        #qr-container { text-align: center; margin: 20px 0; }
+        #qr-code { 
+            display: inline-block; 
+            padding: 15px; 
+            background: #fff; 
+            border: 2px solid var(--border); 
+            box-shadow: 6px 6px 0 0 var(--border);
+        }
+        #qr-code svg { display: block; width: 160px; height: 160px; }
+        #qr-label { 
+            font-size: 0.85rem; 
+            margin-top: 12px; 
+            color: var(--accent2); 
+            text-transform: uppercase;
+            letter-spacing: 0.1rem;
+        }
     </style>
 </head>
 <body>
@@ -90,6 +107,10 @@
         <div id="receive" class="section active">
             <label>YOUR CODE (share with sender):</label>
             <div class="code-display" id="my-code">------</div>
+            <div id="qr-container">
+                <div id="qr-code"></div>
+                <div id="qr-label">Scan to open send page</div>
+            </div>
             <div id="recv-status" class="status hidden"></div>
             <div id="recv-progress" class="hidden">
                 <label>RECEIVING:</label>
@@ -123,11 +144,79 @@
     </div>
 
     <script nonce="{{nonce}}">
-    (function() {
-        let ws, myCode, selectedFile, pc, dc;
-        const CHUNK_SIZE = 16384; // 16KB chunks
+    (function () {
+        'use strict';
 
-        // --- Tab switching ---
+        // --- QR Code Generator using external qrcode-generator library ---
+        function generateQR(text) {
+            const qr = qrcode(0, 'M');
+            qr.addData(text);
+            qr.make();
+            return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+        }
+
+        // --- State ---
+        let ws = null;
+        let myCode = '';
+        let selectedFile = null;
+        let pc = null;
+        let dc = null;
+
+        // --- Constants ---
+        const CHUNK_SIZE = 64 * 1024; // 64KB chunks for better performance
+
+        // --- Utility Functions ---
+        function formatSize(bytes) {
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let i = 0;
+            while (bytes >= 1024 && i < 3) {
+                bytes /= 1024;
+                i++;
+            }
+            return bytes.toFixed(2) + ' ' + units[i];
+        }
+
+        function showStatus(id, msg, type) {
+            const el = document.getElementById(id);
+            el.textContent = msg;
+            el.className = 'status' + (type ? ' ' + type : '');
+            el.classList.remove('hidden');
+        }
+
+        function updateProgress(mode, current, total) {
+            const pct = (current / total * 100).toFixed(1);
+            document.getElementById(mode + '-fill').style.width = pct + '%';
+            document.getElementById(mode + '-info').textContent =
+                formatSize(current) + ' / ' + formatSize(total) + ' (' + pct + '%)';
+        }
+
+        async function computeChecksum(data) {
+            const hash = await crypto.subtle.digest('SHA-256', data);
+            return Array.from(new Uint8Array(hash))
+                .map(b => b.toString(16).padStart(2, '0'))
+                .join('');
+        }
+
+        function base64Encode(uint8Array) {
+            let binary = '';
+            const len = uint8Array.byteLength;
+            for (let i = 0; i < len; i++) {
+                binary += String.fromCharCode(uint8Array[i]);
+            }
+            return btoa(binary);
+        }
+
+        function base64Decode(base64) {
+            const binary = atob(base64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        // --- Tab Switching ---
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -137,30 +226,54 @@
             });
         });
 
-        // --- WebSocket connection ---
+        // --- WebSocket Connection ---
         function connect() {
             const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${proto}//${location.host}/ws`);
-            
+
             ws.onmessage = async (e) => {
                 const msg = JSON.parse(e.data);
-                
-                if (msg.type === 'code') {
-                    myCode = msg.code;
-                    document.getElementById('my-code').textContent = myCode;
-                }
-                else if (msg.type === 'offer') {
-                    // Receiver got offer
-                    await handleOffer(msg.from, msg.data);
-                }
-                else if (msg.type === 'answer') {
-                    // Sender got answer
-                    await pc.setRemoteDescription(msg.data);
-                }
-                else if (msg.type === 'ice') {
-                    if (pc && msg.data) {
-                        await pc.addIceCandidate(msg.data);
-                    }
+
+                switch (msg.type) {
+                    case 'code':
+                        myCode = msg.code;
+                        document.getElementById('my-code').textContent = myCode;
+                        // Generate QR code with URL to send page with code pre-filled
+                        const sendUrl = `${location.protocol}//${location.host}/p2p#send:${myCode}`;
+                        document.getElementById('qr-code').innerHTML = generateQR(sendUrl);
+                        break;
+
+                    case 'offer':
+                        await handleOffer(msg.from, msg.data);
+                        break;
+
+                    case 'answer':
+                        if (pc) await pc.setRemoteDescription(msg.data);
+                        break;
+
+                    case 'ice':
+                        if (pc && msg.data) await pc.addIceCandidate(msg.data);
+                        break;
+
+                    case 'relay-start':
+                        ws.send(JSON.stringify({ type: 'relay-ready', target: msg.from }));
+                        break;
+
+                    case 'relay-ready':
+                        if (window.pendingRelaySend) window.pendingRelaySend();
+                        break;
+
+                    case 'relay-meta':
+                        relayReceiver.handleMeta(msg.from, msg.data);
+                        break;
+
+                    case 'relay-chunk':
+                        relayReceiver.handleChunk(msg.data);
+                        break;
+
+                    case 'relay-end':
+                        relayReceiver.handleEnd(msg.data);
+                        break;
                 }
             };
 
@@ -168,18 +281,48 @@
         }
         connect();
 
-        // --- File selection ---
+        // --- Handle URL hash for direct send mode (from QR code scan) ---
+        function handleUrlHash() {
+            const hash = location.hash;
+            if (hash.startsWith('#send:')) {
+                const code = hash.slice(6);
+                if (code.length === 6 && /^\d{6}$/.test(code)) {
+                    // Switch to send tab
+                    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+                    document.querySelector('[data-tab="send"]').classList.add('active');
+                    document.getElementById('send').classList.add('active');
+                    // Pre-fill the code
+                    document.getElementById('target-code').value = code;
+                }
+            }
+        }
+
+        // --- File Selection ---
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
         const sendBtn = document.getElementById('send-btn');
 
         dropZone.addEventListener('click', () => fileInput.click());
-        ['dragenter','dragover'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('hover'); }));
-        ['dragleave','drop'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.remove('hover'); }));
-        
+
+        ['dragenter', 'dragover'].forEach(e => {
+            dropZone.addEventListener(e, ev => {
+                ev.preventDefault();
+                dropZone.classList.add('hover');
+            });
+        });
+
+        ['dragleave', 'drop'].forEach(e => {
+            dropZone.addEventListener(e, ev => {
+                ev.preventDefault();
+                dropZone.classList.remove('hover');
+            });
+        });
+
         dropZone.addEventListener('drop', e => {
             if (e.dataTransfer.files[0]) selectFile(e.dataTransfer.files[0]);
         });
+
         fileInput.addEventListener('change', () => {
             if (fileInput.files[0]) selectFile(fileInput.files[0]);
         });
@@ -194,21 +337,30 @@
         }
 
         document.getElementById('target-code').addEventListener('input', checkReady);
-        
+
         function checkReady() {
             const code = document.getElementById('target-code').value;
             sendBtn.disabled = !(selectedFile && code.length === 6);
         }
 
-        // --- Send file ---
+        // Handle URL hash after all setup is complete
+        handleUrlHash();
+
+        // --- File Sender ---
         sendBtn.addEventListener('click', startSend);
 
         async function startSend() {
             const targetCode = document.getElementById('target-code').value;
             if (!selectedFile || targetCode.length !== 6) return;
-            
+
             sendBtn.disabled = true;
-            showStatus('send-status', 'Connecting...', '');
+            showStatus('send-status', 'Computing checksum...', '');
+
+            // Compute file checksum
+            const fileBuffer = await selectedFile.arrayBuffer();
+            const checksum = await computeChecksum(fileBuffer);
+
+            showStatus('send-status', 'Connecting (trying P2P first)...', '');
 
             // Generate encryption key
             const key = await crypto.subtle.generateKey(
@@ -220,12 +372,30 @@
 
             // Create WebRTC connection
             pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]
             });
+
+            let connectionTimeout;
+            let connected = false;
 
             pc.onicecandidate = e => {
                 if (e.candidate) {
-                    ws.send(JSON.stringify({ type: 'ice', target: targetCode, data: e.candidate }));
+                    ws.send(JSON.stringify({
+                        type: 'ice',
+                        target: targetCode,
+                        data: e.candidate
+                    }));
+                }
+            };
+
+            pc.oniceconnectionstatechange = () => {
+                const state = pc.iceConnectionState;
+                if ((state === 'failed' || state === 'disconnected') && !connected) {
+                    clearTimeout(connectionTimeout);
+                    fallbackToRelay(targetCode, key, exportedKey, checksum);
                 }
             };
 
@@ -234,67 +404,334 @@
             dc.binaryType = 'arraybuffer';
 
             dc.onopen = async () => {
-                showStatus('send-status', 'Connected! Encrypting and sending...', 'success');
-                document.getElementById('send-progress').classList.remove('hidden');
-                
-                // Send metadata + key first
-                const meta = {
-                    name: selectedFile.name,
-                    size: selectedFile.size,
-                    key: Array.from(new Uint8Array(exportedKey))
-                };
-                dc.send(JSON.stringify(meta));
-
-                // Read and encrypt file in chunks
-                const reader = selectedFile.stream().getReader();
-                let sent = 0;
-                
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    
-                    // Encrypt chunk
-                    const iv = crypto.getRandomValues(new Uint8Array(12));
-                    const encrypted = await crypto.subtle.encrypt(
-                        { name: 'AES-GCM', iv },
-                        key,
-                        value
-                    );
-                    
-                    // Combine IV + encrypted data
-                    const combined = new Uint8Array(12 + encrypted.byteLength);
-                    combined.set(iv, 0);
-                    combined.set(new Uint8Array(encrypted), 12);
-
-                    // Wait for buffer to drain
-                    while (dc.bufferedAmount > 1024 * 1024) {
-                        await new Promise(r => setTimeout(r, 50));
-                    }
-                    
-                    dc.send(combined);
-                    sent += value.length;
-                    updateProgress('send', sent, selectedFile.size);
-                }
-
-                // Signal end
-                dc.send('__END__');
-                showStatus('send-status', 'File sent successfully!', 'success');
+                connected = true;
+                clearTimeout(connectionTimeout);
+                showStatus('send-status', 'P2P connected! Sending...', 'success');
+                await sendFileViaDataChannel(key, exportedKey, checksum);
             };
 
-            dc.onerror = () => showStatus('send-status', 'Transfer failed', 'error');
+            dc.onerror = () => {
+                if (!connected) fallbackToRelay(targetCode, key, exportedKey, checksum);
+            };
 
             // Create and send offer
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
             ws.send(JSON.stringify({ type: 'offer', target: targetCode, data: offer }));
+
+            // Timeout - if no connection in 8 seconds, use relay
+            connectionTimeout = setTimeout(() => {
+                if (!connected) {
+                    fallbackToRelay(targetCode, key, exportedKey, checksum);
+                }
+            }, 8000);
         }
 
-        // --- Handle incoming connection (receiver) ---
+        async function sendFileViaDataChannel(key, exportedKey, checksum) {
+            document.getElementById('send-progress').classList.remove('hidden');
+
+            // Read file as array buffer and split into chunks
+            const fileBuffer = await selectedFile.arrayBuffer();
+            const fileData = new Uint8Array(fileBuffer);
+            const totalChunks = Math.ceil(fileData.length / CHUNK_SIZE);
+
+            // Send metadata with checksum and total chunks
+            const meta = {
+                name: selectedFile.name,
+                size: selectedFile.size,
+                checksum: checksum,
+                totalChunks: totalChunks,
+                key: Array.from(new Uint8Array(exportedKey))
+            };
+            dc.send(JSON.stringify(meta));
+
+            // Send chunks with sequence numbers
+            let sent = 0;
+            for (let seq = 0; seq < totalChunks; seq++) {
+                const start = seq * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, fileData.length);
+                const chunk = fileData.slice(start, end);
+
+                // Encrypt chunk
+                const iv = crypto.getRandomValues(new Uint8Array(12));
+                const encrypted = await crypto.subtle.encrypt(
+                    { name: 'AES-GCM', iv },
+                    key,
+                    chunk
+                );
+
+                // Create packet: 4 bytes seq + 12 bytes IV + encrypted data
+                const seqBytes = new Uint8Array(4);
+                new DataView(seqBytes.buffer).setUint32(0, seq, false);
+
+                const packet = new Uint8Array(4 + 12 + encrypted.byteLength);
+                packet.set(seqBytes, 0);
+                packet.set(iv, 4);
+                packet.set(new Uint8Array(encrypted), 16);
+
+                // Wait for buffer to drain
+                while (dc.bufferedAmount > 1024 * 1024) {
+                    await new Promise(r => setTimeout(r, 50));
+                }
+
+                dc.send(packet);
+                sent += chunk.length;
+                updateProgress('send', sent, selectedFile.size);
+            }
+
+            // Signal end
+            dc.send('__END__');
+            showStatus('send-status', 'File sent successfully! (P2P)', 'success');
+        }
+
+        // --- Relay Fallback ---
+        async function fallbackToRelay(targetCode, key, exportedKey, checksum) {
+            if (pc) { pc.close(); pc = null; }
+            if (dc) { dc.close(); dc = null; }
+
+            showStatus('send-status', 'P2P blocked, using encrypted relay...', '');
+            ws.send(JSON.stringify({ type: 'relay-start', target: targetCode }));
+
+            window.pendingRelaySend = async () => {
+                document.getElementById('send-progress').classList.remove('hidden');
+
+                // Read file as array buffer
+                const fileBuffer = await selectedFile.arrayBuffer();
+                const fileData = new Uint8Array(fileBuffer);
+                const totalChunks = Math.ceil(fileData.length / CHUNK_SIZE);
+
+                // Send metadata
+                const meta = {
+                    name: selectedFile.name,
+                    size: selectedFile.size,
+                    checksum: checksum,
+                    totalChunks: totalChunks,
+                    key: Array.from(new Uint8Array(exportedKey))
+                };
+                ws.send(JSON.stringify({
+                    type: 'relay-meta',
+                    target: targetCode,
+                    data: meta
+                }));
+
+                // Wait for metadata to be processed
+                await new Promise(r => setTimeout(r, 150));
+
+                // Send chunks with sequence numbers
+                let sent = 0;
+                for (let seq = 0; seq < totalChunks; seq++) {
+                    const start = seq * CHUNK_SIZE;
+                    const end = Math.min(start + CHUNK_SIZE, fileData.length);
+                    const chunk = fileData.slice(start, end);
+
+                    // Encrypt chunk
+                    const iv = crypto.getRandomValues(new Uint8Array(12));
+                    const encrypted = await crypto.subtle.encrypt(
+                        { name: 'AES-GCM', iv },
+                        key,
+                        chunk
+                    );
+
+                    // Create packet: 4 bytes seq + 12 bytes IV + encrypted data
+                    const seqBytes = new Uint8Array(4);
+                    new DataView(seqBytes.buffer).setUint32(0, seq, false);
+
+                    const packet = new Uint8Array(4 + 12 + encrypted.byteLength);
+                    packet.set(seqBytes, 0);
+                    packet.set(iv, 4);
+                    packet.set(new Uint8Array(encrypted), 16);
+
+                    // Base64 encode for WebSocket
+                    const b64 = base64Encode(packet);
+                    ws.send(JSON.stringify({
+                        type: 'relay-chunk',
+                        target: targetCode,
+                        data: { seq: seq, payload: b64 }
+                    }));
+
+                    sent += chunk.length;
+                    updateProgress('send', sent, selectedFile.size);
+
+                    // Throttle
+                    if (seq % 3 === 0) {
+                        await new Promise(r => setTimeout(r, 15));
+                    }
+                }
+
+                // Wait then send end with checksum for verification
+                await new Promise(r => setTimeout(r, 300));
+                ws.send(JSON.stringify({
+                    type: 'relay-end',
+                    target: targetCode,
+                    data: { checksum: checksum, totalChunks: totalChunks }
+                }));
+                showStatus('send-status', 'File sent! Waiting for verification...', 'success');
+            };
+        }
+
+        // --- Relay Receiver (with ordered reassembly) ---
+        const relayReceiver = {
+            key: null,
+            fileName: '',
+            fileSize: 0,
+            checksum: '',
+            totalChunks: 0,
+            chunks: new Map(), // seq -> decrypted data
+            expectedSeq: 0,
+            processing: false,
+            queue: [],
+
+            reset() {
+                this.key = null;
+                this.fileName = '';
+                this.fileSize = 0;
+                this.checksum = '';
+                this.totalChunks = 0;
+                this.chunks = new Map();
+                this.expectedSeq = 0;
+                this.processing = false;
+                this.queue = [];
+            },
+
+            async handleMeta(from, meta) {
+                this.reset();
+                this.fileName = meta.name;
+                this.fileSize = meta.size;
+                this.checksum = meta.checksum;
+                this.totalChunks = meta.totalChunks;
+
+                this.key = await crypto.subtle.importKey(
+                    'raw',
+                    new Uint8Array(meta.key),
+                    'AES-GCM',
+                    false,
+                    ['decrypt']
+                );
+
+                showStatus('recv-status', 'Receiving (relay): ' + this.fileName, 'success');
+                document.getElementById('recv-progress').classList.remove('hidden');
+            },
+
+            handleChunk(data) {
+                this.queue.push({ type: 'chunk', data: data });
+                this.processQueue();
+            },
+
+            handleEnd(data) {
+                this.queue.push({ type: 'end', data: data });
+                this.processQueue();
+            },
+
+            async processQueue() {
+                if (this.processing) return;
+                this.processing = true;
+
+                while (this.queue.length > 0) {
+                    const item = this.queue.shift();
+
+                    if (item.type === 'chunk' && this.key) {
+                        try {
+                            const packet = base64Decode(item.data.payload);
+                            const seq = new DataView(packet.buffer).getUint32(0, false);
+                            const iv = packet.slice(4, 16);
+                            const encrypted = packet.slice(16);
+
+                            const decrypted = await crypto.subtle.decrypt(
+                                { name: 'AES-GCM', iv },
+                                this.key,
+                                encrypted
+                            );
+
+                            this.chunks.set(seq, new Uint8Array(decrypted));
+
+                            const received = this.chunks.size * CHUNK_SIZE;
+                            updateProgress('recv', Math.min(received, this.fileSize), this.fileSize);
+                        } catch (err) {
+                            console.error('Decrypt error at chunk:', err);
+                        }
+                    } else if (item.type === 'end') {
+                        await this.finalize(item.data);
+                    }
+                }
+
+                this.processing = false;
+            },
+
+            async finalize(endData) {
+                // Wait a moment for any remaining chunks
+                await new Promise(r => setTimeout(r, 100));
+
+                // Check we have all chunks
+                if (this.chunks.size !== this.totalChunks) {
+                    showStatus(
+                        'recv-status',
+                        `Missing chunks: got ${this.chunks.size}/${this.totalChunks}`,
+                        'error'
+                    );
+                    return;
+                }
+
+                // Reassemble in order
+                const orderedChunks = [];
+                for (let i = 0; i < this.totalChunks; i++) {
+                    const chunk = this.chunks.get(i);
+                    if (!chunk) {
+                        showStatus('recv-status', `Missing chunk ${i}`, 'error');
+                        return;
+                    }
+                    orderedChunks.push(chunk);
+                }
+
+                // Combine chunks
+                const totalSize = orderedChunks.reduce((sum, c) => sum + c.length, 0);
+                const fileData = new Uint8Array(totalSize);
+                let offset = 0;
+                for (const chunk of orderedChunks) {
+                    fileData.set(chunk, offset);
+                    offset += chunk.length;
+                }
+
+                // Verify checksum
+                const receivedChecksum = await computeChecksum(fileData);
+                if (receivedChecksum !== this.checksum) {
+                    showStatus(
+                        'recv-status',
+                        'Checksum mismatch! File may be corrupted.',
+                        'error'
+                    );
+                    return;
+                }
+
+                // Download file
+                const blob = new Blob([fileData]);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = this.fileName || 'download';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                showStatus(
+                    'recv-status',
+                    'File received: ' + this.fileName + ' (' + formatSize(blob.size) + ') ✓ Verified',
+                    'success'
+                );
+
+                this.reset();
+            }
+        };
+
+        // --- WebRTC Receiver ---
         async function handleOffer(from, offer) {
-            showStatus('recv-status', 'Incoming connection from ' + from + '...', '');
-            
+            showStatus('recv-status', 'Incoming connection...', '');
+
             pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]
             });
 
             pc.onicecandidate = e => {
@@ -303,7 +740,12 @@
                 }
             };
 
-            let key, fileName, fileSize, chunks = [], received = 0;
+            let key = null;
+            let fileName = '';
+            let fileSize = 0;
+            let checksum = '';
+            let totalChunks = 0;
+            const chunks = new Map();
 
             pc.ondatachannel = e => {
                 dc = e.channel;
@@ -312,21 +754,56 @@
                 dc.onmessage = async (ev) => {
                     if (typeof ev.data === 'string') {
                         if (ev.data === '__END__') {
-                            // Combine and download
-                            const blob = new Blob(chunks);
+                            // Reassemble in order
+                            const orderedChunks = [];
+                            for (let i = 0; i < totalChunks; i++) {
+                                const chunk = chunks.get(i);
+                                if (!chunk) {
+                                    showStatus('recv-status', `Missing chunk ${i}`, 'error');
+                                    return;
+                                }
+                                orderedChunks.push(chunk);
+                            }
+
+                            // Combine
+                            const total = orderedChunks.reduce((s, c) => s + c.length, 0);
+                            const fileData = new Uint8Array(total);
+                            let off = 0;
+                            for (const chunk of orderedChunks) {
+                                fileData.set(chunk, off);
+                                off += chunk.length;
+                            }
+
+                            // Verify checksum
+                            const recvChecksum = await computeChecksum(fileData);
+                            if (recvChecksum !== checksum) {
+                                showStatus('recv-status', 'Checksum mismatch!', 'error');
+                                return;
+                            }
+
+                            // Download
+                            const blob = new Blob([fileData]);
                             const url = URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = url;
                             a.download = fileName;
                             a.click();
                             URL.revokeObjectURL(url);
-                            showStatus('recv-status', 'File received: ' + fileName, 'success');
+                            showStatus(
+                                'recv-status',
+                                'File received: ' + fileName + ' ✓ Verified',
+                                'success'
+                            );
                             return;
                         }
+
                         // Metadata
                         const meta = JSON.parse(ev.data);
                         fileName = meta.name;
                         fileSize = meta.size;
+                        checksum = meta.checksum;
+                        totalChunks = meta.totalChunks;
+
                         key = await crypto.subtle.importKey(
                             'raw',
                             new Uint8Array(meta.key),
@@ -334,23 +811,26 @@
                             false,
                             ['decrypt']
                         );
-                        showStatus('recv-status', 'Receiving: ' + fileName, 'success');
+
+                        showStatus('recv-status', 'Receiving (P2P): ' + fileName, 'success');
                         document.getElementById('recv-progress').classList.remove('hidden');
                     } else {
-                        // Encrypted chunk
-                        const data = new Uint8Array(ev.data);
-                        const iv = data.slice(0, 12);
-                        const encrypted = data.slice(12);
-                        
+                        // Encrypted chunk with sequence
+                        const packet = new Uint8Array(ev.data);
+                        const seq = new DataView(packet.buffer).getUint32(0, false);
+                        const iv = packet.slice(4, 16);
+                        const encrypted = packet.slice(16);
+
                         try {
                             const decrypted = await crypto.subtle.decrypt(
                                 { name: 'AES-GCM', iv },
                                 key,
                                 encrypted
                             );
-                            chunks.push(new Uint8Array(decrypted));
-                            received += decrypted.byteLength;
-                            updateProgress('recv', received, fileSize);
+                            chunks.set(seq, new Uint8Array(decrypted));
+
+                            const received = chunks.size * CHUNK_SIZE;
+                            updateProgress('recv', Math.min(received, fileSize), fileSize);
                         } catch (err) {
                             showStatus('recv-status', 'Decryption failed', 'error');
                         }
@@ -362,27 +842,6 @@
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
             ws.send(JSON.stringify({ type: 'answer', target: from, data: answer }));
-        }
-
-        // --- Helpers ---
-        function showStatus(id, msg, type) {
-            const el = document.getElementById(id);
-            el.textContent = msg;
-            el.className = 'status' + (type ? ' ' + type : '');
-            el.classList.remove('hidden');
-        }
-
-        function updateProgress(mode, current, total) {
-            const pct = (current / total * 100).toFixed(1);
-            document.getElementById(mode + '-fill').style.width = pct + '%';
-            document.getElementById(mode + '-info').textContent = formatSize(current) + ' / ' + formatSize(total) + ' (' + pct + '%)';
-        }
-
-        function formatSize(bytes) {
-            const units = ['B', 'KB', 'MB', 'GB'];
-            let i = 0;
-            while (bytes >= 1024 && i < 3) { bytes /= 1024; i++; }
-            return bytes.toFixed(2) + ' ' + units[i];
         }
     })();
     </script>
