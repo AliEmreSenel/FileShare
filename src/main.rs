@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::{ConnectInfo, DefaultBodyLimit, Multipart, Path, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode}, // Added HeaderMap
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -29,7 +29,7 @@ const UPLOAD_DIR: &str = "data/files";
 const DB_URL: &str = "sqlite://data/db.sqlite?mode=rwc";
 const MAX_SIZE: usize = 100 * 1024 * 1024; // 100 MB
 
-// Load templates
+// Import the separate HTML files at compile time
 const HTML_UPLOAD: &str = include_str!("../templates/upload.html");
 const HTML_FILE: &str = include_str!("../templates/file.html");
 
@@ -40,12 +40,25 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    fs::create_dir_all(UPLOAD_DIR).await?;
-    if let Some(p) = std::path::Path::new("data").parent() {
-        if !p.as_os_str().is_empty() {
-            fs::create_dir_all("data").await?;
-        }
-    }
+    fs::create_dir_all(UPLOAD_DIR).await.map_err(|e| {
+        eprintln!(
+            "CRITICAL: Failed to create upload dir '{}': {}",
+            UPLOAD_DIR, e
+        );
+        e
+    })?;
+
+    // 2. Connect to DB (creates file if missing due to mode=rwc)
+    let pool = SqlitePoolOptions::new()
+        .connect(DB_URL)
+        .await
+        .map_err(|e| {
+            eprintln!(
+                "CRITICAL: Failed to connect/create DB at '{}': {}",
+                DB_URL, e
+            );
+            e
+        })?;
 
     let pool = SqlitePoolOptions::new().connect(DB_URL).await?;
     sqlx::query(
@@ -57,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .execute(&pool)
     .await?;
 
+    // Note: We still need ConnectInfo for the fallback IP
     let app = Router::new()
         .route("/", get(show_upload))
         .route("/u", post(handle_upload))
@@ -75,7 +89,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// --- HELPER: Generate Nonce ---
 fn gen_nonce() -> String {
     rand::rng()
         .sample_iter(&Alphanumeric)
@@ -84,23 +97,35 @@ fn gen_nonce() -> String {
         .collect()
 }
 
-// --- HANDLERS ---
+// --- HELPER: Extract Real IP ---
+fn get_real_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
+    if let Some(val) = headers.get("x-forwarded-for") {
+        if let Ok(s) = val.to_str() {
+            // X-Forwarded-For can be "client, proxy1, proxy2". We want the first one.
+            if let Some(first) = s.split(',').next() {
+                return first.trim().to_string();
+            }
+        }
+    }
+    // Fallback to the direct connection IP (Docker gateway) if header is missing
+    addr.ip().to_string()
+}
 
 async fn show_upload() -> Html<String> {
-    // Inject a unique nonce for CSP
     let nonce = gen_nonce();
-    let html = HTML_UPLOAD
-        .replace("{{nonce}}", &nonce)
-        .replace("{{max_size}}", &MAX_SIZE.to_string());
-    Html(html)
+    Html(HTML_UPLOAD.replace("{{nonce}}", &nonce))
 }
 
 async fn handle_upload(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap, // Extract headers to look for X-Forwarded-For
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
     let mut ttl_days = 1;
+
+    // Resolve IP immediately
+    let user_ip = get_real_ip(&headers, addr);
 
     while let Ok(Some(mut field)) = multipart.next_field().await {
         let name = field.name().unwrap_or("");
@@ -114,7 +139,6 @@ async fn handle_upload(
                 }
             }
         } else if name == "file" {
-            // RAW INPUT: No sanitization. Storing exact bytes sent by browser.
             let filename = field.file_name().unwrap_or("unknown").to_string();
 
             let token: String = rand::rng()
@@ -158,7 +182,7 @@ async fn handle_upload(
                 .bind(size as i64)
                 .bind(now)
                 .bind(now + (ttl_days * 86400) as i64)
-                .bind(addr.ip().to_string())
+                .bind(&user_ip) // Save the real IP
                 .execute(&state.pool)
                 .await
                 .map_err(AppError::Db)?;
@@ -194,9 +218,6 @@ async fn show_file(
     }
 
     let nonce = gen_nonce();
-
-    // Injecting RAW, potentially malicious filename.
-    // Safety relies entirely on CSP in the HTML template.
     let html = HTML_FILE
         .replace("{{nonce}}", &nonce)
         .replace("{{filename}}", &row.filename)
@@ -269,14 +290,25 @@ enum AppError {
 }
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (s, m) = match self {
-            AppError::Io(_) | AppError::Db(_) | AppError::EncryptionError => {
+        let (status, msg) = match self {
+            AppError::Io(e) => {
+                // PRINT THE ERROR so you can see it in docker logs
+                eprintln!(">> IO ERROR: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Server Error")
+            }
+            AppError::Db(e) => {
+                // PRINT THE ERROR
+                eprintln!(">> DB ERROR: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Server Error")
+            }
+            AppError::EncryptionError => {
+                eprintln!(">> Encryption Error: File too short or corrupted");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Server Error")
             }
             AppError::BadRequest => (StatusCode::BAD_REQUEST, "Bad Request"),
             AppError::NotFound => (StatusCode::NOT_FOUND, "Not Found"),
         };
-        (s, m.to_string()).into_response()
+        (status, msg.to_string()).into_response()
     }
 }
 
